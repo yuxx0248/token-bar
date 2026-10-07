@@ -1,0 +1,10 @@
+# Build artifacts
+TokenBar
+*.o
+*.dSYM/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
