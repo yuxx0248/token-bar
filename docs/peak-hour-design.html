@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TokenBar · Peak Hour 显示 — 设计文档</title>
+<style>
+  :root {
+    --ink: #1d1f24;
+    --ink-2: #4b5058;
+    --ink-3: #8a9099;
+    --line: #e4e7ec;
+    --bg: #ffffff;
+    --bg-2: #f6f7f9;
+    --accent: #c7462d;
+    --code-bg: #f4f4f2;
+    --peak: #e8833a;
+    --offpeak: #2f9e9e;
+    --promo: #b8860b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0 24px 80px;
+    font: 15px/1.75 -apple-system, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+    color: var(--ink); background: var(--bg);
+  }
+  .page { max-width: 880px; margin: 0 auto; }
+  header { padding: 48px 0 24px; border-bottom: 1px solid var(--line); margin-bottom: 32px; }
+  h1 { font-size: 27px; margin: 0 0 10px; letter-spacing: -0.02em; }
+  .meta { color: var(--ink-3); font-size: 13px; }
+  h2 { font-size: 20px; margin: 52px 0 14px; letter-spacing: -0.01em; }
+  h2 .no { color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 8px; }
+  h3 { font-size: 16px; margin: 28px 0 10px; }
+  p { margin: 10px 0; }
+  ul, ol { padding-left: 24px; margin: 10px 0; }
+  li { margin: 4px 0; }
+  a { color: #2f6fb0; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    font: 13px/1.6 "SF Mono", ui-monospace, Menlo, monospace;
+    background: var(--code-bg); padding: 1px 5px; border-radius: 4px;
+    font-size: 0.88em;
+  }
+  pre {
+    background: #22242a; color: #e8e6e3; border-radius: 10px;
+    padding: 16px 18px; overflow-x: auto; line-height: 1.6;
+    font: 13px/1.6 "SF Mono", ui-monospace, Menlo, monospace;
+  }
+  pre code { background: none; padding: 0; color: inherit; font-size: 13px; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--bg-2); font-weight: 600; white-space: nowrap; }
+  .tag {
+    display: inline-block; font-size: 12px; font-weight: 600; border-radius: 20px;
+    padding: 1px 10px; vertical-align: 2px; margin-left: 8px;
+  }
+  .tag.peak  { background: #fdeee3; color: var(--peak); }
+  .tag.off   { background: #e2f4f4; color: var(--offpeak); }
+  .tag.promo { background: #f7efd8; color: var(--promo); }
+  .callout {
+    border-left: 3px solid var(--accent); background: #fbf5f2;
+    padding: 12px 18px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 14px;
+  }
+  .callout.blue { border-color: #2f6fb0; background: #f0f5fa; }
+  .callout.ok   { border-color: var(--offpeak); background: #eff8f8; }
+
+  /* —— macOS 菜单栏 / 下拉菜单 mockup —— */
+  .menubar {
+    background: linear-gradient(#e9e9eb, #dededf); border: 1px solid #c9c9cc;
+    border-radius: 8px; padding: 6px 12px; display: flex; align-items: center;
+    justify-content: flex-end; gap: 18px; font-size: 14px; margin: 14px 0;
+    box-shadow: inset 0 1px 0 #ffffff88;
+  }
+  .menubar .item {
+    background: #2c2c2e; color: #f2f2f4; border-radius: 5px;
+    padding: 2px 9px; font-weight: 500; letter-spacing: 0.01em;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .menubar .sys { color: #4b5058; }
+  .dropdown {
+    background: rgba(248, 248, 250, 0.97); border: 1px solid #d4d4d8;
+    border-radius: 10px; padding: 6px 0; width: 380px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.18); font-size: 13.5px; margin: 10px 0 10px auto;
+  }
+  .dropdown .row { padding: 3px 14px; white-space: nowrap; }
+  .dropdown .head { color: var(--ink-3); font-size: 11.5px; font-weight: 600; padding-top: 8px; }
+  .dropdown .sep { border-top: 1px solid #e2e2e6; margin: 6px 0; }
+  .dropdown .new { background: #fff8ec; }
+  .dropdown .bar { font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+  .dropdown .faint { color: var(--ink-3); }
+  .g5 { color: #28a745; } .y7 { color: #b8860b; } .r9 { color: #d9534f; }
+  .teal { color: var(--offpeak); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } .dropdown { width: 100%; } }
+  .caption { font-size: 12.5px; color: var(--ink-3); text-align: center; margin: 4px 0 16px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <h1>TokenBar · Peak Hour 显示</h1>
+  <div class="meta">
+    设计文档 v1 · 2026-10-06 · 状态：<b>已实现</b>（图标位置按最终决定：百分比之后） ·
+    涉及文件 <code>main.swift</code>（单文件原型）
+  </div>
+</header>
+
+<nav>
+  <b>目录</b>
+  <ol>
+    <li><a href="#tldr">TL;DR</a></li>
+    <li><a href="#facts">背景与官方事实</a></li>
+    <li><a href="#ux">交互设计（菜单栏 / tooltip / 下拉菜单）</a></li>
+    <li><a href="#icon">图标方案与推荐</a></li>
+    <li><a href="#tech">技术设计（数据模型 / 判定算法 / 时区换算）</a></li>
+    <li><a href="#tasks">实现任务拆解</a></li>
+    <li><a href="#tests">测试用例</a></li>
+    <li><a href="#future">后续与开放问题</a></li>
+  </ol>
+</nav>
+
+<!-- ================================================================ -->
+<h2 id="tldr"><span class="no">0</span>TL;DR</h2>
+<ul>
+  <li>Peak 官方定义：<b>周一至周五 14:00–18:00，UTC+8（新加坡时间）</b>；其余时间（晚间、清晨、周末）均为 off-peak，消耗减半。</li>
+  <li>quota/limit 接口<b>不返回</b> peak 信息（已实测），需在 app 内内置静态规则 + 促销期覆盖表。</li>
+  <li>菜单栏标题在百分比之后追加状态图标：<b>peak 🔥 / off-peak ❄️</b>（推荐 SF Symbols <code>flame.fill</code> / <code>snowflake</code>，橙 / 青双色）。</li>
+  <li>下拉菜单新增「Peak 时段」小节：当前状态 + 倒计时、换算成本地时区的时段、计费倍率说明。</li>
+  <li>注意：今天（10-06）落在官方促销期 <b>2026-09-25 ~ 10-07 全天 off-peak</b> 内，实现后上线即会命中该覆盖分支，正好可以验证。</li>
+</ul>
+
+<!-- ================================================================ -->
+<h2 id="facts"><span class="no">1</span>背景与官方事实</h2>
+
+<h3>1.1 计费规则（来源：docs.z.ai）</h3>
+<table>
+  <tr><th>项目</th><th>规则</th></tr>
+  <tr>
+    <td>Peak 时段</td>
+    <td>周一至周五 <b>14:00–18:00</b> 新加坡标准时间（<b>UTC+8</b>，无夏令时）</td>
+  </tr>
+  <tr>
+    <td>Off-peak 时段</td>
+    <td>其余全部时间：工作日 00:00–14:00 与 18:00–24:00、<b>周末全天</b></td>
+  </tr>
+  <tr>
+    <td>倍率（GLM-5.3）</td>
+    <td>peak <b>3×</b> / off-peak <b>1×</b></td>
+  </tr>
+  <tr>
+    <td>倍率（GLM-5.3-Flash）</td>
+    <td>peak <b>1.2×</b> / off-peak <b>0.4×</b></td>
+  </tr>
+  <tr>
+    <td>促销覆盖期</td>
+    <td><b>2026-09-25 ~ 2026-10-07</b>（UTC+8）全天按 off-peak 计费</td>
+  </tr>
+</table>
+
+<h3>1.2 接口现状（已实测）</h3>
+<p>实际调用 <code>GET /api/monitor/usage/quota/limit</code>，返回中只有
+<code>level</code> 与 <code>limits[]</code>（5h / 周窗口），<b>没有任何 peak 相关字段</b>；
+本地 ZCode 客户端代码里的 <code>peakHour</code> 是统计页"最活跃小时"，与计费无关。</p>
+<div class="callout">
+  <b>结论：</b>peak 规则无法从 API 获得，按「内置静态规则 + 可覆盖的促销期列表」实现。
+  规则集中放在一个 <code>PeakPolicy</code> 常量区，官方改时段时只改一处。
+</div>
+
+<h3>1.3 语义澄清</h3>
+<p>标题图标回答的问题是「<b>此刻消耗的是不是 peak 倍率</b>」，而不是"现在是不是 14–18 点"——
+两者在促销期会分离（促销期内即使是 14–18 点也按 off-peak 计费，图标应显示 off-peak）。
+下拉菜单里再展示日历意义上的时段和促销说明。</p>
+
+<!-- ================================================================ -->
+<h2 id="ux"><span class="no">2</span>交互设计</h2>
+
+<h3>2.1 菜单栏标题（直接显示）</h3>
+<p>现有：<code>⚡</code> + 5h 百分比 + <code> · </code> + 周百分比。在<b>百分比之后</b>追加一个
+peak 状态图标（与配额数字留一个空格），颜色语义与现有百分比着色体系一致（暖 = 贵/危险，冷 = 便宜/安全）：</p>
+
+<div class="menubar">
+  <span class="sys">🔋 100%</span><span class="sys">📶</span>
+  <span class="item"><span class="g5">⚡ 16% · 5%</span> <span style="color:#e8833a">🔥</span></span>
+</div>
+<div class="caption">peak 状态（工作日 14:00–18:00 UTC+8）：橙色 flame</div>
+
+<div class="menubar">
+  <span class="sys">🔋 100%</span><span class="sys">📶</span>
+  <span class="item"><span class="g5">⚡ 16% · 5%</span> <span class="teal">❄</span></span>
+</div>
+<div class="caption">off-peak 状态（其余时间 / 周末 / 促销期）：青色 snowflake</div>
+
+<ul>
+  <li>图标放在末尾：紧跟配额数据之后，读作「当前窗口消耗处于什么档位」，也不与开头的 <code>⚡</code> 品牌位挤在一起。</li>
+  <li>宽度代价约 14pt，菜单栏可接受；图标不参与交互（菜单栏整块本来就是按钮）。</li>
+  <li>mockup 中以 emoji 示意，实际实现首选 SF Symbols（见 <a href="#icon">§3</a>），颜色可精确控制。</li>
+  <li>数据未加载（快照为空、显示模拟数据）时：仍显示 peak 图标——peak 判定是<b>纯本地计算，不依赖网络</b>，这是把它做进标题的底气。</li>
+</ul>
+
+<h3>2.2 Tooltip（hover 菜单栏）</h3>
+<pre><code>Coding Plan 窗口: 5h 16% · 周 5%
+API 今日: 62.40M · 近7天 412.1M
+Peak: 周一至周五 14:00–18:00 (UTC+8) · 当前 off-peak（GLM-5.3 1× 消耗）
+数据来源: 官方 · GLM Coding Pro</code></pre>
+
+<h3>2.3 下拉菜单新增小节</h3>
+<p>插在「周窗口」之后、「今日 API 用量」之前，与 Coding Plan 配额信息归为一组。</p>
+
+<div class="dropdown">
+  <div class="row"><b>Z.ai 用量</b> <span class="faint">官方 · GLM Coding Pro</span></div>
+  <div class="sep"></div>
+  <div class="row head">5 小时窗口（CODING PLAN）</div>
+  <div class="row bar">████░░░░░░░░░░░░  16%</div>
+  <div class="row faint">重置 10/6 23:40（约 2h 58m 后）</div>
+  <div class="sep"></div>
+  <div class="row head">周窗口（CODING PLAN）</div>
+  <div class="row bar">██░░░░░░░░░░░░░░  5%</div>
+  <div class="row faint">重置 10/8 17:36（约 2d 4h 后）</div>
+  <div class="sep"></div>
+  <div class="row head">PEAK 时段（CODING PLAN）</div>
+  <div class="row new">❄ 当前 <b>off-peak</b> · 下一 peak 10/7 14:00（约 22h 31m 后）</div>
+  <div class="row new faint">本地时段：周一至周五 14:00–18:00（UTC+8，已换算）</div>
+  <div class="row new faint">计费：off-peak GLM-5.3 1× · Flash 0.4× ｜ peak 3× · 1.2×</div>
+  <div class="sep"></div>
+  <div class="row head">今日 API 用量（账户级 · 含所有 agent）</div>
+  <div class="row faint">62.40M tokens · 2.7千 次调用</div>
+  <div class="row teal">▁▂▃▂▅▃▂▁▂▄▆▃▂▁▁▁▁▁▁▁▁</div>
+  <div class="sep"></div>
+  <div class="row faint">更新于 13:12，每 5 分钟自动刷新　　立即刷新 ⌘R</div>
+</div>
+<div class="caption">常规 off-peak 状态（本地时区 = UTC+8 时的样子）</div>
+
+<h3>2.4 三种状态的文案矩阵</h3>
+<table>
+  <tr><th>状态</th><th>标题图标</th><th>菜单首行</th><th>附加说明</th></tr>
+  <tr>
+    <td><span class="tag peak">peak</span></td>
+    <td>🔥 橙</td>
+    <td>🔥 当前 <b>peak</b> · 18:00 结束（约 1h 12m 后）</td>
+    <td>本地时段行 + 倍率行</td>
+  </tr>
+  <tr>
+    <td><span class="tag off">off-peak</span></td>
+    <td>❄ 青</td>
+    <td>❄ 当前 <b>off-peak</b> · 下一 peak {日期} {HH:mm}（约 Xh Ym 后）</td>
+    <td>本地时段行 + 倍率行</td>
+  </tr>
+  <tr>
+    <td><span class="tag promo">促销 off-peak</span></td>
+    <td>❄ 青</td>
+    <td>❄ 当前 <b>off-peak</b>（促销期全天半价）· 10/8 00:00 恢复（约 1d 3h 后）</td>
+    <td>「原时段：周一至周五 14:00–18:00 (UTC+8)」</td>
+  </tr>
+</table>
+
+<div class="callout blue">
+  <b>倒计时刷新：</b>标题图标与菜单文案在现有的 30s <code>renderTimer</code> 里重算即可
+  （peak 判定是纯本地、微秒级），无需为状态切换增加定时器；最坏 30s 的过期可接受。
+</div>
+
+<!-- ================================================================ -->
+<h2 id="icon"><span class="no">3</span>图标方案与推荐</h2>
+
+<table>
+  <tr><th>方案</th><th>peak / off-peak</th><th>优点</th><th>缺点</th><th></th></tr>
+  <tr>
+    <td><b>A · SF Symbols</b></td>
+    <td><code>flame.fill</code> 🔥 / <code>snowflake</code> ❄</td>
+    <td>macOS 原生观感，12pt 锐利，粗细与菜单栏匹配；可任意着色（橙 / 青），暗色模式可控</td>
+    <td>需 <code>NSTextAttachment</code> + 着色 helper（约 30 行）</td>
+    <td><b>✅ 推荐</b></td>
+  </tr>
+  <tr>
+    <td>B · Emoji</td>
+    <td>🔥 / ❄️</td>
+    <td>零代码，自带彩色</td>
+    <td>颜色不可控、跨系统渲染不一致、宽度偏大、暗色菜单栏上偏"跳"</td>
+    <td>备选</td>
+  </tr>
+  <tr>
+    <td>C · 文本符号</td>
+    <td><code>▲</code> / <code>▽</code>（着色）</td>
+    <td>最极简，宽度最小</td>
+    <td>▲/▽ 容易误读为"用量涨/跌"，语义错位</td>
+    <td>不推荐</td>
+  </tr>
+  <tr>
+    <td>D · SF 昼夜对</td>
+    <td><code>sun.max.fill</code> / <code>moon.stars.fill</code></td>
+    <td>直觉的"白天/夜晚"</td>
+    <td><b>语义错误</b>：peak 是工作日 14–18 点；off-peak 包含工作日白天（如上午 10 点 ❓）</td>
+    <td>不推荐</td>
+  </tr>
+  <tr>
+    <td>E · SF 闪电对</td>
+    <td><code>bolt.fill</code> / <code>bolt.slash</code></td>
+    <td>"耗电快/慢"隐喻贴切</td>
+    <td>与 app 自身的 <code>⚡</code> 前缀重复，两个闪电图标并排易混淆</td>
+    <td>不推荐</td>
+  </tr>
+</table>
+
+<h3>推荐理由（方案 A）</h3>
+<ul>
+  <li><b>语义最准</b>：peak = 配额烧得快（3×），"火焰"是最直接的隐喻；off-peak = 价格冷却，"雪花" + 冷色。</li>
+  <li><b>颜色系统一致</b>：橙（<code>systemOrange</code>）/ 青（<code>systemTeal</code>，与现有走势图同色）构成暖冷对比，半秒可读。</li>
+  <li><b>菜单栏友好</b>：SF Symbols 在 12pt 下经过 Apple 调优，比 emoji 干净；着色后深浅菜单栏都成立。</li>
+</ul>
+
+<h3>着色实现要点</h3>
+<pre><code>/// 用 NSTextAttachment 把着色后的 SF Symbol 嵌进 attributedTitle
+func peakIcon(state: PeakState) -&gt; NSAttributedString {
+    let name  = state == .peak ? "flame.fill" : "snowflake"
+    let color = state == .peak ? NSColor.systemOrange : NSColor.systemTeal
+    let att = NSTextAttachment()
+    if let img = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+        .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold)) {
+        att.image = img.tinted(with: color)          // 小 helper：bitmap 重绘着色
+        att.bounds = CGRect(x: 0, y: -2, width: 12, height: 12)  // 基线对齐 12pt 文本
+    }
+    return NSAttributedString(attachment: att)
+}</code></pre>
+
+<!-- ================================================================ -->
+<h2 id="tech"><span class="no">4</span>技术设计</h2>
+
+<h3>4.1 数据模型</h3>
+<pre><code>enum PeakState { case peak, offPeak, promoOffPeak }
+
+struct PeakStatus {
+    var state: PeakState
+    var localWindowText: String   // 换算到本地时区的时段描述，如 "周一至周五 14:00–18:00"
+    var nextChange: Date?         // 状态下次切换时刻（peak 结束 / 下个 peak 开始 / 促销结束）
+    var nextChangeLabel: String?  // 如 "18:00 结束" / "下一 peak 10/7 14:00" / "10/8 00:00 恢复"
+    var note: String?             // 促销备注，如 "促销期全天 off-peak"
+}
+
+/// 官方规则集中地 —— 官方调价时只改这里
+enum PeakPolicy {
+    static let tz = TimeZone(identifier: "Asia/Singapore")!   // UTC+8，无夏令时
+    static let startHour = 14
+    static let endHour   = 18
+    static let weekdays: Set&lt;Int&gt; = [2, 3, 4, 5, 6]           // Calendar.weekday：1=周日
+    static let rateNote  = "off-peak GLM-5.3 1× · Flash 0.4× ｜ peak 3× · 1.2×"
+
+    /// 全天 off-peak 的促销覆盖期（SGT 挂钟时间；start 闭、end 开）
+    static let promos: [(start: Date, end: Date, note: String)] = [
+        (date("2026-09-25 00:00"), date("2026-10-08 00:00"), "促销期：全天按 off-peak 计费"),
+    ]
+}</code></pre>
+
+<h3>4.2 判定算法（纯本地、O(1)）</h3>
+<pre><code>func evaluatePeak(now: Date = Date()) -&gt; PeakStatus {
+    var cal = Calendar(identifier: .gregorian)
+    cal.timeZone = PeakPolicy.tz                       // ① 一律在 SGT 日历里判定，
+    let c = cal.dateComponents([.weekday, .hour], from: now)  //    本地时区/夏令时完全不影响正确性
+
+    // ② 促销覆盖优先于常规时段
+    if let p = PeakPolicy.promos.first(where: { now &gt;= $0.start &amp;&amp; now &lt; $0.end }) {
+        return PeakStatus(state: .promoOffPeak, ..., nextChange: p.end,
+                          nextChangeLabel: "…恢复", note: p.note)
+    }
+
+    // ③ 常规判定：工作日 &amp; 14 ≤ hour &lt; 18
+    let inWindow = PeakPolicy.weekdays.contains(c.weekday!)
+                &amp;&amp; c.hour! &gt;= PeakPolicy.startHour &amp;&amp; c.hour! &lt; PeakPolicy.endHour
+
+    // ④ nextChange：peak → 今日 18:00；off-peak → 从 now 起向前逐日找
+    //    下一个「工作日 14:00」（最多 7 次迭代），再套 fmtDuration 生成倒计时文案
+    ...
+}</code></pre>
+
+<h3>4.3 本地时区换算（显示）</h3>
+<p>换算只影响<b>展示</b>，不影响判定。取本周周一~周五 5 个 SGT 窗口
+（<code>weekday 14:00</code> ~ <code>weekday 18:00</code>），逐一转成本地 <code>Date</code>
+再格式化；5 个本地区间形制相同时压缩成一条范围。</p>
+
+<table>
+  <tr><th>本地时区</th><th>换算结果（示例）</th><th>说明</th></tr>
+  <tr><td>Asia/Shanghai（UTC+8）</td><td>周一至周五 14:00–18:00</td><td>与 SGT 同偏移，恒等</td></tr>
+  <tr><td>UTC</td><td>周一至周五 06:00–10:00</td><td>整点偏移，同日</td></tr>
+  <tr><td>Asia/Kolkata（UTC+5:30）</td><td>周一至周五 11:30–15:30</td><td>半小时偏移，同日</td></tr>
+  <tr><td>America/Los_Angeles（UTC-7 夏令时）</td><td><b>周日至周四 23:00–次日 03:00</b></td>
+      <td>跨午夜 + 星期整体前移一天；跨日端需 <code>(+1d)</code> 后缀</td></tr>
+</table>
+
+<div class="callout">
+  <b>必须程序化换算、不能写死本地字符串</b>：偏移 ≥ 15h（西侧）时窗口跨午夜且星期平移。
+  另注意本地时区若有夏令时，换算结果会随 DST 切换漂移 1 小时——每次刷新重算即可（现有
+  5 分钟数据刷新 + 30s 渲染刷新已覆盖）。判定逻辑始终在 SGT 进行，不受影响。
+</div>
+
+<h3>4.4 接线点（对现有代码的最小改动）</h3>
+<table>
+  <tr><th>位置</th><th>改动</th></tr>
+  <tr><td><code>renderTitle()</code></td>
+      <td>在周百分比 run 之后 append 空格 + <code>peakIcon(state)</code>；tooltip 增加一行 peak 概要。
+      peak 状态<b>渲染时实时调用</b> <code>evaluatePeak()</code>（纯本地计算），不进网络快照，
+      30s renderTimer 自动保持倒计时新鲜</td></tr>
+  <tr><td><code>rebuildMenu()</code></td>
+      <td>「周窗口」小节后新增「Peak 时段（Coding Plan）」小节：状态行 + 本地时段行 + 倍率行
+      （+ 促销期的 note 行）；沿用 <code>addHeader / addDetail</code></td></tr>
+  <tr><td><code>UsageSnapshot</code></td><td><b>不需要改</b>——peak 是渲染期派生值，非网络数据</td></tr>
+  <tr><td><code>mockSnapshot()</code></td><td>无需改（同理）</td></tr>
+  <tr><td>README</td><td>补充 peak 数据来源说明（官方文档静态规则）</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="tasks"><span class="no">5</span>实现任务拆解</h2>
+<table>
+  <tr><th>#</th><th>任务</th><th>产出</th><th>规模</th></tr>
+  <tr><td>P0-1</td><td><code>PeakPolicy</code> / <code>PeakState</code> / <code>PeakStatus</code> + <code>evaluatePeak()</code></td>
+      <td>纯逻辑函数，可独立 <code>swift -e</code> 驱动验证</td><td>~90 行</td></tr>
+  <tr><td>P0-2</td><td>本地时段换算 <code>localWindowText()</code>（含跨午夜 / 星期平移 / <code>(+1d)</code>）</td>
+      <td>纯逻辑函数 + 用例验证</td><td>~50 行</td></tr>
+  <tr><td>P0-3</td><td><code>peakIcon()</code>：SF Symbol 取图、着色 helper、基线对齐</td>
+      <td>标题新 run</td><td>~35 行</td></tr>
+  <tr><td>P0-4</td><td><code>renderTitle()</code> 接线 + tooltip 行</td><td>标题显示三态图标</td><td>~10 行</td></tr>
+  <tr><td>P0-5</td><td><code>rebuildMenu()</code> 新小节（状态/时段/倍率/促销 note）</td><td>下拉信息完整</td><td>~20 行</td></tr>
+  <tr><td>P1-1</td><td>促销期过期自动清理（end 已过即忽略，天然满足；无需额外代码，验证即可）</td><td>—</td><td>0</td></tr>
+  <tr><td>P1-2</td><td>系统时区变更 / 睡眠唤醒后立即重渲染（监听 <code>NSSystemTimeZoneDidChange</code>）</td><td>细节完善</td><td>~10 行</td></tr>
+  <tr><td>P1-3</td><td>peak 规则外置（UserDefaults / 配置文件），便于官方调时段后用户自改</td><td>进阶</td><td>可选</td></tr>
+</table>
+<p>总改动约 <b>200 行</b>，全部在 <code>main.swift</code>，不动网络层与数据层。</p>
+
+<!-- ================================================================ -->
+<h2 id="tests"><span class="no">6</span>测试用例</h2>
+<h3>6.1 状态判定（以 UTC+8 挂钟时间构造 Date）</h3>
+<table>
+  <tr><th>输入时刻（SGT）</th><th>期望状态</th><th>nextChange</th></tr>
+  <tr><td>周一 13:59:59</td><td>offPeak</td><td>周一 14:00</td></tr>
+  <tr><td>周一 14:00:00</td><td>peak</td><td>周一 18:00</td></tr>
+  <tr><td>周一 17:59:59</td><td>peak</td><td>周一 18:00</td></tr>
+  <tr><td>周一 18:00:00</td><td>offPeak</td><td>周二 14:00</td></tr>
+  <tr><td>周五 18:30</td><td>offPeak</td><td>下周一 14:00（跨周末）</td></tr>
+  <tr><td>周六 15:00</td><td>offPeak</td><td>下周一 14:00</td></tr>
+  <tr><td>周日 23:59</td><td>offPeak</td><td>下周一 14:00</td></tr>
+  <tr><td>2026-10-06（周二）15:00</td><td><b>promoOffPeak</b></td><td>2026-10-08 00:00</td></tr>
+  <tr><td>2026-10-08（周四）15:00</td><td>peak</td><td>10-08 18:00</td></tr>
+</table>
+
+<h3>6.2 本地时段换算</h3>
+<table>
+  <tr><th>本地时区</th><th>期望 localWindowText</th></tr>
+  <tr><td>Asia/Shanghai</td><td>周一至周五 14:00–18:00</td></tr>
+  <tr><td>UTC</td><td>周一至周五 06:00–10:00</td></tr>
+  <tr><td>America/Los_Angeles（夏令时）</td><td>周日至周四 23:00–03:00（+1d）</td></tr>
+</table>
+
+<h3>6.3 UI 冒烟</h3>
+<ul>
+  <li>构造 <code>now</code> 注入（给 <code>evaluatePeak</code> 加默认参数即可测试）：三态各截一张标题 + 下拉截图。</li>
+  <li>mock 数据模式下 peak 图标照常显示（验证"不依赖网络"）。</li>
+</ul>
+
+<!-- ================================================================ -->
+<h2 id="future"><span class="no">7</span>后续与开放问题</h2>
+<ul>
+  <li><b>官方改时段怎么办</b>：目前规则写死在 <code>PeakPolicy</code>（集中一处）。若未来官方在 API 里暴露 peak 字段（或发布订阅接口），替换数据源即可，UI 层不动。</li>
+  <li><b>促销期维护</b>：新促销活动需手动加进 <code>promos</code>；结束日期过后自动失效。</li>
+  <li><b>菜单栏宽度</b>：若未来再加信息导致标题过宽，优先考虑把 peak 图标与 <code>⚡</code> 合并成一个复合图标（peak 时整体变橙）。</li>
+  <li><b>「下个 peak 提醒」</b>（如提前 15min 用户通知）：可作为 P2，用 <code>UNUserNotificationCenter</code>，默认关闭。</li>
+</ul>
+
+<footer style="margin-top:56px;padding-top:16px;border-top:1px solid var(--line);font-size:13px;color:var(--ink-3)">
+  参考：
+  <a href="https://docs.z.ai/devpack/overview">GLM Coding Plan — Overview</a> ·
+  <a href="https://docs.z.ai/devpack/notice/usage-revision">Plan Update Announcement（credits 计费修订）</a> ·
+  接口实测：<code>GET api.z.ai/api/monitor/usage/quota/limit</code>（2026-10-06）
+</footer>
+
+</div>
+</body>
+</html>
