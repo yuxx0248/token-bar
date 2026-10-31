@@ -3,7 +3,8 @@
 macOS 菜单栏（右上角）小插件，显示 **Z.ai API 账户用量**（账户级、覆盖所有 agent，
 不限于 ZCode——其他 agent 用同一个账号的 API key 消耗的用量都算在内）。
 
-菜单栏标题：`⚡5h% · 周% ❄`（两个窗口百分比 + peak 状态图标）。
+菜单栏标题：`⚡5h% · 周% ❄`（两个窗口百分比 + peak 状态图标；有 Starter Plan
+赠送额度时追加紫色 `· ✦已用%`）。
 点击展开下拉面板：今日 / 近 7 天总用量与调用次数、按模型明细（GLM-5.3、Flash…）、
 今日逐小时用量走势（字符走势图）。
 
@@ -53,6 +54,24 @@ z.ai 官网订阅页「Usage Reset」卡片（5 小时 / 周 两种重置卡）�
 行为与官网一致：周卡使用后同时恢复 5h 额度；多张可用时自动优先消耗**最早到期**的一张；
 菜单里点「使用…重置卡」先弹确认框，成功后自动刷新窗口百分比。
 注意：该端点未在官方文档公开（属于官网控制台内部接口），随时可能变动。
+
+## Starter Plan 赠送额度（紫色 ✦）
+
+ZCode 客户端「Starter Plan」（如限时活动包 ZCODE WEEKEND BUILD）的同款接口，每次刷新检查：
+
+- `GET https://zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version=…` →
+  `data.plans`（活动套餐，含 `status` / `ends_at`）+ `data.balances`（额度桶，
+  含 `total_units` / `used_units` / `remaining_units` / `expires_at`，单位 token）
+- 注意与 api.z.ai 接口的三点差异：host 是 **zcode.z.ai**；key 用
+  `builtin:zai-start-plan`（本身就是 zcode JWT），鉴权头要加 **Bearer** 前缀；
+  必须带 ZCode 客户端同款来源头（`X-ZCode-App-Version` / `X-Platform` /
+  `X-Client-*` / `X-Device-Mid`（读自 `~/.zcode/v2/telemetry-state.json`）等），
+  缺了会返回 400 `parameter error`
+- 已过期套餐（`status` 非 active 或 `ends_at` 已过）按客户端同款规则剔除；
+  多个额度桶累加，到期时间取最早
+- 有可用额度时：菜单栏标题追加紫色 `· ✦已用%`，下拉菜单新增「Starter Plan（赠送额度）」
+  小节（紫色进度条 + 已用/总量/剩余/模型 + 套餐名与到期倒计时），来源标签追加 `Starter Plan`
+- 无 starter plan 账号或无 active 套餐时整段隐藏，不影响其他显示
 
 
 ## 与 Coding Plan 窗口的关系

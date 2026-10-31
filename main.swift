@@ -9,6 +9,8 @@
 //  2. GET  /api/monitor/usage/model-usage?...     → 账户级 API 用量（含所有 agent）
 //  3. GET  /api/biz/customer-package-reset/list   → 重置卡余额（Reset Card）
 //  4. POST /api/biz/customer-package-reset/use    → 使用重置卡（立即恢复对应额度）
+//  5. GET  zcode.z.ai/api/v1/zcode-plan/billing/balance → Starter Plan 赠送额度
+//     （host/鉴权/头都不同：Bearer + zai-start-plan 的 JWT key + ZCode 来源头）
 //
 
 import AppKit
@@ -252,9 +254,26 @@ struct ResetCardState {
     var weekCount: Int { availableCards(of: "WEEK").count }
 }
 
+/// Starter Plan 赠送额度（ZCode 客户端「Starter Plan」同款数据，一个活动包可含多个额度桶）
+struct StarterPlanBalance {
+    var loaded = false
+    var planName = ""           // 如 "ZCODE WEEKEND BUILD"
+    var modelName = ""          // 额度桶 show_name，如 "GLM-5.3-Flash"
+    var totalUnits = 0
+    var usedUnits = 0
+    var remainingUnits = 0
+    var expiresAt: Date?        // 各桶最早到期时间
+
+    var usedPct: Int {
+        totalUnits > 0 ? Int(Double(usedUnits) / Double(totalUnits) * 100) : 0
+    }
+    var hasQuota: Bool { loaded && totalUnits > 0 }
+}
+
 struct UsageSnapshot {
     var quota = QuotaWindows()
     var cards = ResetCardState()
+    var starter = StarterPlanBalance()
     var today = ModelUsage()
     var week = ModelUsage()
     var source = "加载中…"
@@ -346,6 +365,111 @@ final class UsageMonitor {
             }
         }
         return st
+    }
+
+    // MARK: Starter Plan 赠送额度（zcode.z.ai，鉴权/来源头与 api.z.ai 接口不同）
+
+    private static let zcodeAppVersion = "3.16.3"
+
+    /// config.json 里 start-plan 账号的 key（本身即 zcode JWT，与 coding-plan 的 key 不同）
+    private func startPlanJWT() -> String? {
+        let path = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".zcode/v2/config.json").path
+        guard let data = FileManager.default.contents(atPath: path),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let provider = obj["provider"] as? [String: Any]
+        else { return nil }
+        for id in ["builtin:zai-start-plan", "builtin:bigmodel-start-plan"] {
+            if let entry = provider[id] as? [String: Any],
+               let options = entry["options"] as? [String: Any],
+               let key = options["apiKey"] as? String, !key.isEmpty {
+                return key
+            }
+        }
+        return nil
+    }
+
+    /// ZCode 客户端同款来源头里的设备号（telemetry-state.json）
+    private func deviceMid() -> String {
+        let path = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".zcode/v2/telemetry-state.json").path
+        guard let data = FileManager.default.contents(atPath: path),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let mid = obj["deviceMid"] as? String
+        else { return "" }
+        return mid
+    }
+
+    /// GET billing/balance：返回 {code:0,...}（注意不是 success:true 形），过期套餐按客户端同款规则剔除
+    private func fetchStarterPlan(key: String) -> StarterPlanBalance {
+        var comp = URLComponents(string: "https://zcode.z.ai/api/v1/zcode-plan/billing/balance")!
+        comp.queryItems = [URLQueryItem(name: "app_version", value: Self.zcodeAppVersion)]
+        var req = URLRequest(url: comp.url!, timeoutInterval: 12)
+        req.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")
+        req.setValue("ZCode/" + Self.zcodeAppVersion, forHTTPHeaderField: "User-Agent")
+        req.setValue("https://zcode.z.ai", forHTTPHeaderField: "HTTP-Referer")
+        req.setValue("Z Code@electron", forHTTPHeaderField: "X-Title")
+        req.setValue(Self.zcodeAppVersion, forHTTPHeaderField: "X-ZCode-App-Version")
+        #if arch(arm64)
+        let arch = "arm64"
+        #else
+        let arch = "x64"
+        #endif
+        req.setValue("darwin-\(arch)", forHTTPHeaderField: "X-Platform")
+        req.setValue(Locale.current.identifier, forHTTPHeaderField: "X-Client-Language")
+        req.setValue(TimeZone.current.identifier, forHTTPHeaderField: "X-Client-Timezone")
+        req.setValue("macos", forHTTPHeaderField: "X-Os-Category")
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        req.setValue("\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)", forHTTPHeaderField: "X-Os-Version")
+        let mid = deviceMid()
+        if !mid.isEmpty { req.setValue(mid, forHTTPHeaderField: "X-Device-Mid") }
+
+        var result: [String: Any]?
+        let sem = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            defer { sem.signal() }
+            guard let data,
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  (obj["code"] as? Int) == 0
+            else { return }
+            result = obj
+        }.resume()
+        sem.wait()
+        guard let obj = result,
+              let d = obj["data"] as? [String: Any]
+        else { return StarterPlanBalance() }
+
+        var sp = StarterPlanBalance()
+        sp.loaded = true
+        let now = Date().timeIntervalSince1970
+        // 归属到未过期 active 套餐的额度桶（服务端时间做兜底，与客户端 normalizeStartPlanExpiry 一致）
+        let serverNow = (d["server_time"] as? Double) ?? now
+        let activePlanIds = Set(((d["plans"] as? [[String: Any]]) ?? []).compactMap { p -> String? in
+            guard (p["status"] as? String)?.lowercased() == "active" else { return nil }
+            if let ends = p["ends_at"] as? Double, ends > 0, ends <= serverNow { return nil }
+            return p["plan_id"] as? String
+        })
+        guard !activePlanIds.isEmpty else { return sp }
+        if let first = ((d["plans"] as? [[String: Any]]) ?? []).first(where: {
+            activePlanIds.contains($0["plan_id"] as? String ?? "")
+        }) {
+            sp.planName = first["name"] as? String ?? ""
+        }
+        for b in (d["balances"] as? [[String: Any]]) ?? [] {
+            guard activePlanIds.contains(b["plan_id"] as? String ?? ""),
+                  let total = b["total_units"] as? Int,
+                  let used = b["used_units"] as? Int
+            else { continue }
+            sp.modelName = b["show_name"] as? String ?? sp.modelName
+            sp.totalUnits += total
+            sp.usedUnits += used
+            sp.remainingUnits += (b["remaining_units"] as? Int) ?? max(0, total - used)
+            if let exp = b["expires_at"] as? Double, exp > 0 {
+                let date = Date(timeIntervalSince1970: exp)
+                sp.expiresAt = min(sp.expiresAt ?? date, date)
+            }
+        }
+        return sp
     }
 
     /// 使用一张重置卡（自动选最早到期的那张，与官网「优先使用」逻辑一致）
@@ -452,6 +576,12 @@ final class UsageMonitor {
             ResetCard(resetType: "WEEK", recordId: 1003, grantType: "CAMPAIGN",
                       expire: Date().addingTimeInterval(-86400), available: false),
         ]
+        s.starter = StarterPlanBalance(loaded: true, planName: "ZCODE WEEKEND BUILD",
+                                       modelName: "GLM-5.3-Flash",
+                                       totalUnits: 500_000_000,
+                                       usedUnits: 106_476_657,
+                                       remainingUnits: 393_523_343,
+                                       expiresAt: Date().addingTimeInterval(46 * 3600))
         for (scale, label) in [(1.0, "today"), (3.2, "week")] {
             var u = ModelUsage()
             u.loaded = true
@@ -482,6 +612,9 @@ final class UsageMonitor {
                 s.today = self.fetchUsage(key: key, start: todayStart, end: todayEnd)
                 s.week = self.fetchUsage(key: key, start: weekStart, end: todayEnd)
             }
+            if let spKey = self.startPlanJWT() {
+                s.starter = self.fetchStarterPlan(key: spKey)
+            }
 
             if !s.quota.loaded && !s.today.loaded {
                 let mock = ProcessInfo.processInfo.environment["TOKENBAR_MOCK"] == nil
@@ -494,14 +627,18 @@ final class UsageMonitor {
                 if s.quota.loaded {
                     parts.append("GLM Coding " + (s.quota.level.map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? "Plan"))
                 }
+                if s.starter.hasQuota { parts.append("Starter Plan") }
                 if s.today.loaded { parts.append("账户级 API") }
                 s.source = "官方 · " + parts.joined(separator: " + ")
             }
             s.lastRefresh = now
-            NSLog("TokenBar refresh: %@ 5h=%d%% week=%d%% today=%@/%d cards=%@(%d/%d)",
+            NSLog("TokenBar refresh: %@ 5h=%d%% week=%d%% today=%@/%d cards=%@(%d/%d) starter=%@",
                   s.source, s.quota.fiveHourPct, s.quota.weekPct,
                   fmtTokens(s.today.totalTokens), s.today.totalCalls,
-                  s.cards.loaded ? "loaded" : "n/a", s.cards.fiveHourCount, s.cards.weekCount)
+                  s.cards.loaded ? "loaded" : "n/a", s.cards.fiveHourCount, s.cards.weekCount,
+                  s.starter.hasQuota
+                      ? "\(s.starter.planName) \(s.starter.usedPct)% used=\(s.starter.usedUnits)/\(s.starter.totalUnits)"
+                      : (s.starter.loaded ? "empty" : "n/a"))
             let snap = s
             DispatchQueue.main.async {
                 self.snapshot = snap
@@ -567,6 +704,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular),
             .foregroundColor: pctColor(s.quota.weekPct),
         ]))
+        if s.starter.hasQuota {
+            // Starter Plan 赠送额度：紫色 ✦ 标记 + 已用百分比
+            str.append(NSAttributedString(string: " · ✦\(s.starter.usedPct)%", attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular),
+                .foregroundColor: NSColor.systemPurple,
+            ]))
+        }
         str.append(NSAttributedString(string: " ", attributes: [
             .font: NSFont.systemFont(ofSize: 12),
         ]))
@@ -579,6 +723,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         """
         if s.cards.loaded, s.cards.fiveHourCount + s.cards.weekCount > 0 {
             tip += "\n重置卡可用: 5小时 ×\(s.cards.fiveHourCount) · 周 ×\(s.cards.weekCount)"
+        }
+        if s.starter.hasQuota {
+            tip += "\nStarter Plan: \(s.starter.planName) 已用 \(s.starter.usedPct)%（剩 \(fmtTokens(s.starter.remainingUnits))/\(fmtTokens(s.starter.totalUnits)) \(s.starter.modelName)）"
         }
         tip += "\n数据来源: \(s.source)"
         button.toolTip = tip
@@ -667,6 +814,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if fh > 0 { addUseCardItem(menu: menu, type: "FIVE_HOUR", count: fh, cards: s.cards) }
                 if wk > 0 { addUseCardItem(menu: menu, type: "WEEK", count: wk, cards: s.cards) }
             }
+        }
+
+        if s.starter.hasQuota {
+            menu.addItem(.separator())
+            addHeader(menu, "Starter Plan（赠送额度）")
+            addProgress(menu, pct: s.starter.usedPct, color: .systemPurple)
+            var line = "已用 \(fmtTokens(s.starter.usedUnits)) / \(fmtTokens(s.starter.totalUnits)) tokens（剩 \(fmtTokens(s.starter.remainingUnits))）"
+            if !s.starter.modelName.isEmpty { line += " · \(s.starter.modelName)" }
+            addDetail(menu, line)
+            var extra = "套餐：\(s.starter.planName)"
+            if let e = s.starter.expiresAt {
+                extra += " · \(fullTimeFmt.string(from: e)) 到期（约 \(fmtDuration(e.timeIntervalSinceNow)) 后）"
+            }
+            addDetail(menu, extra)
         }
 
         if s.today.loaded {
@@ -763,14 +924,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(item)
     }
 
-    private func addProgress(_ menu: NSMenu, pct: Int) {
+    private func addProgress(_ menu: NSMenu, pct: Int, color: NSColor? = nil) {
         let p = min(max(pct, 0), 100)
         let blocks = 14
         let filled = Int((Double(p) / 100 * Double(blocks)).rounded())
         let barFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
 
         let str = NSMutableAttributedString(string: String(repeating: "█", count: filled), attributes: [
-            .font: barFont, .foregroundColor: pctColor(p),
+            .font: barFont, .foregroundColor: color ?? pctColor(p),
         ])
         str.append(NSAttributedString(string: String(repeating: "░", count: blocks - filled), attributes: [
             .font: barFont, .foregroundColor: NSColor.tertiaryLabelColor,
