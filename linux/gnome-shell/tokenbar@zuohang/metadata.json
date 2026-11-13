@@ -1,0 +1,6 @@
+{
+  "uuid": "tokenbar@zuohang",
+  "name": "TokenBar",
+  "description": "Z.ai / GLM Coding Plan 用量顶栏插件：5h/周窗口、账户级 API 用量、按模型明细、逐小时走势。Linux port of the macOS menu bar TokenBar.",
+  "shell-version": ["45", "46", "47", "48", "49", "50", "51"]
+}

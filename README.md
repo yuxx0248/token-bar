@@ -1,38 +1,28 @@
-# TokenBar — 菜单栏 Z.ai API 用量插件（原型 v3）
+# TokenBar — Z.ai / GLM Coding Plan 用量菜单栏插件（原型）
 
-macOS 菜单栏（右上角）小插件，显示 **Z.ai API 账户用量**（账户级、覆盖所有 agent，
-不限于 ZCode——其他 agent 用同一个账号的 API key 消耗的用量都算在内）。
+在系统菜单栏/顶栏显示 **Z.ai 账户用量**：Coding Plan 5h/周窗口百分比，
+以及账户级 API 用量（覆盖所有 agent——其他 agent 用同一账号消耗的用量都算在内）。
 
-菜单栏标题：`API 87M`（今日 tokens，简写）。
+菜单栏标题：`⚡5h% · wk%`（按百分比红黄绿着色）。
 点击展开下拉面板：今日 / 近 7 天总用量与调用次数、按模型明细（GLM-5.3、Flash…）、
-今日逐小时用量走势（字符走势图）。
+今日逐小时用量走势（字符走势图）、窗口进度条 + 重置倒计时、立即刷新。
 
-## 构建与运行
+## 平台
 
-```bash
-swiftc -O -o TokenBar main.swift
-./TokenBar        # 退出：点菜单栏图标 → 退出 TokenBar（或 ⌘Q）
-```
+| 平台 | 路径 | 形态 | 构建/运行 |
+|---|---|---|---|
+| macOS | [`macos/`](macos/) | 菜单栏 AppKit 应用（Swift 单文件） | `swiftc -O -o TokenBar main.swift && ./TokenBar` |
+| Linux (GNOME) | [`linux/`](linux/) | GNOME Shell 扩展（GJS） | 见 [linux/README.md](linux/README.md) |
 
 ## 数据来源
 
-`GET https://api.z.ai/api/monitor/usage/model-usage?startTime=…&endTime=…`
+`GET https://api.z.ai/api/monitor/usage/...`（与 ZCode 客户端 / z.ai 官网控制台同款接口，账户级统计）
 
-- 与 ZCode 客户端 / z.ai 官网控制台同款接口，账户级统计
-- API key 自动从 `~/.zcode/v2/config.json`（`builtin:zai-coding-plan` → options.apiKey）读取
+- `GET /api/monitor/usage/quota/limit` → Coding Plan 5h/周窗口百分比 + 重置时间
+- `GET /api/monitor/usage/model-usage?startTime=…&endTime=…` → 账户级用量
+  - 时间参数格式 `yyyy-MM-dd HH:mm:ss`（本地时区），今日与近 7 天各查一次
 - 请求头 `authorization` 直接传 key（不加 Bearer 前缀）
-- 时间参数格式 `yyyy-MM-dd HH:mm:ss`（本地时区），今日与近 7 天各查一次
-- 每 5 分钟自动刷新，点开菜单或「立即刷新」也会拉取
-- 接口不可用时显示模拟数据（面板标题会标注），便于纯 UI 评审（`TOKENBAR_MOCK=1` 同效）
+- 每 5 分钟自动刷新，打开菜单也会刷新
+- 接口不可用时显示模拟数据（面板标题标注），便于纯 UI 评审
 
-## 与 Coding Plan 窗口的关系
-
-之前版本显示的 5h/周窗口是 **Coding Plan** 配额（`/api/monitor/usage/quota/limit`），
-本版本已改为 **API 账户总用量**（用户主要需求：其他 agent 也在消耗同一账号）。
-如需两者并存，把 quota 接口的解析加回来即可（代码历史里有实现）。
-
-## 已知简化（原型阶段）
-
-- 官方未提供余额/费用端点（客户端代码里没有），只能显示用量，不能显示剩余额度
-- 每次刷新串行两个 HTTP 请求；走势图按「今日」逐小时，7 天未做按天走势
-- key 读取只支持 zai-coding-plan 一个 provider，多 key 账户未处理
+API key 的存放位置各平台不同，见各平台 README。

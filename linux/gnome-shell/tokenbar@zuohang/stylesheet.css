@@ -1,0 +1,24 @@
+/* TokenBar 顶栏样式 */
+.tokenbar-box {
+    spacing: 2px;
+}
+
+.tokenbar-strong {
+    font-weight: bold;
+}
+
+.tokenbar-dim {
+    color: #cdcdcd;
+}
+
+.tokenbar-pct-ok {
+    color: #33d17a;
+}
+
+.tokenbar-pct-warn {
+    color: #e5a50a;
+}
+
+.tokenbar-pct-bad {
+    color: #f66151;
+}
