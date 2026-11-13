@@ -27,6 +27,8 @@ const Indicator = GObject.registerClass(
 class TokenBarIndicator extends PanelMenu.Button {
     _init() {
         super._init(0.0, 'TokenBar');
+        // PanelMenu.Button 只稳定布局单个子 actor：四个 label 需包在一层 BoxLayout 里
+        this._box = new St.BoxLayout({style_class: 'tokenbar-box'});
         this._peak = new St.Label({
             text: Lib.peakIcon(Date.now()), y_align: Clutter.ActorAlign.CENTER,
         });
@@ -40,7 +42,8 @@ class TokenBarIndicator extends PanelMenu.Button {
         this._week = new St.Label({
             text: '–%', y_align: Clutter.ActorAlign.CENTER, style_class: 'tokenbar-dim',
         });
-        for (const w of [this._peak, this._five, this._sep, this._week]) this.add_child(w);
+        for (const w of [this._peak, this._five, this._sep, this._week]) this._box.add_child(w);
+        this.add_child(this._box);
     }
 
     render(snap) {
