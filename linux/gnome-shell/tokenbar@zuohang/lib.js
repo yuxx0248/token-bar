@@ -58,6 +58,21 @@ export function pctClass(p) {
     return p >= 90 ? 'tokenbar-pct-bad' : p >= 70 ? 'tokenbar-pct-warn' : 'tokenbar-pct-ok';
 }
 
+// MARK: 峰时状态（GLM Coding Plan：北京时间工作日 14:00–18:00 为峰时，2x 计费）
+
+export const PEAK_DEF = '北京时间 工作日 14:00–18:00';
+
+export function isPeakTime(nowMs) {
+    const bj = new Date(nowMs + 8 * 3600e3); // UTC+8 无夏令时：平移后读 UTC 字段即北京时钟
+    const day = bj.getUTCDay();              // 0=周日 … 6=周六
+    const hour = bj.getUTCHours();
+    return day >= 1 && day <= 5 && hour >= 14 && hour < 18;
+}
+
+export function peakIcon(nowMs) {
+    return isPeakTime(nowMs) ? '🔥' : '❄️';
+}
+
 const BAR_BLOCKS = 14;
 
 export function progressBar(pct) {

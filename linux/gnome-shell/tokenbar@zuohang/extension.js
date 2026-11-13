@@ -1,7 +1,7 @@
 //
 //  extension.js — TokenBar GNOME Shell 扩展（macOS 菜单栏版的 Linux 移植）
 //
-//  顶栏：⚡<5h>% · <周>%，点击弹面板；数据源与刷新策略见顶层 README。
+//  顶栏：<峰时icon><5h>% · <周>%（🔥峰时 / ❄️闲时），点击弹面板；数据源与刷新策略见顶层 README。
 //  安装：linux/gnome-shell/install.sh（Wayland 首次安装需注销重登）
 //
 
@@ -20,14 +20,16 @@ import * as Lib from './lib.js';
 
 const API_BASE = 'https://api.z.ai';
 const REFRESH_SEC = 300;              // 数据自动刷新间隔（macOS 版同款）
-const RENDER_SEC = 30;                // 菜单重绘间隔（刷新重置倒计时等相对时间）
+const RENDER_SEC = 30;                // 顶栏/菜单重绘间隔（刷新重置倒计时与峰时状态）
 const OPEN_REFRESH_THROTTLE_SEC = 30; // 打开菜单触发刷新的最小间隔
 
 const Indicator = GObject.registerClass(
 class TokenBarIndicator extends PanelMenu.Button {
     _init() {
         super._init(0.0, 'TokenBar');
-        this._bolt = new St.Label({text: '⚡', y_align: Clutter.ActorAlign.CENTER});
+        this._peak = new St.Label({
+            text: Lib.peakIcon(Date.now()), y_align: Clutter.ActorAlign.CENTER,
+        });
         this._five = new St.Label({
             text: '–%', y_align: Clutter.ActorAlign.CENTER,
             style_class: 'tokenbar-strong tokenbar-dim',
@@ -38,10 +40,11 @@ class TokenBarIndicator extends PanelMenu.Button {
         this._week = new St.Label({
             text: '–%', y_align: Clutter.ActorAlign.CENTER, style_class: 'tokenbar-dim',
         });
-        for (const w of [this._bolt, this._five, this._sep, this._week]) this.add_child(w);
+        for (const w of [this._peak, this._five, this._sep, this._week]) this.add_child(w);
     }
 
     render(snap) {
+        this._peak.text = Lib.peakIcon(Date.now()); // 峰时是纯时间推导，与数据无关
         if (!snap.quota.loaded && !snap.today.loaded) {
             // 没有任何真实数据（未配置 key 等）：显示 –
             this._five.text = '–%';
@@ -86,6 +89,7 @@ export default class TokenBarExtension extends Extension {
             });
         this._renderTimerId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, RENDER_SEC,
             () => {
+                this._indicator.render(this._snapshot); // 峰时图标 30s 内跟上切换
                 this._rebuildMenu();
                 return GLib.SOURCE_CONTINUE;
             });
@@ -245,6 +249,9 @@ export default class TokenBarExtension extends Extension {
         const s = this._snapshot;
 
         this._addInfo(menu, `<b>Z.ai 用量</b>  <small>${Lib.esc(s.source)}</small>`);
+        const peak = Lib.isPeakTime(Date.now());
+        this._addInfo(menu,
+            `<small>${peak ? '🔥 峰时' : '❄️ 闲时'} · ${Lib.esc(Lib.PEAK_DEF)} · ${peak ? '2x' : '1x'} 计费</small>`);
 
         if (s.quota.loaded) {
             menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());

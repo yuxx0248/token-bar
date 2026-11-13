@@ -66,6 +66,16 @@ func pctColor(_ p: Int) -> NSColor {
     p >= 90 ? .systemRed : p >= 70 ? .systemYellow : .systemGreen
 }
 
+/// 峰时状态（GLM Coding Plan：北京时间工作日 14:00–18:00 为峰时，2x 计费）
+/// 🔥 峰时 / ❄️ 闲时
+func isPeakTime(_ date: Date = Date()) -> Bool {
+    var cal = Calendar(identifier: .gregorian)
+    cal.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+    let hour = cal.component(.hour, from: date)
+    let weekday = cal.component(.weekday, from: date) // 1=周日 … 7=周六
+    return (2...6).contains(weekday) && (14..<18).contains(hour)
+}
+
 func sparkline(_ values: [Int]) -> String {
     let blocks = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
     let mx = max(1, values.max() ?? 1)
@@ -314,7 +324,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let button = statusItem.button else { return }
         let s = monitor.snapshot
         let str = NSMutableAttributedString()
-        str.append(NSAttributedString(string: "⚡", attributes: [
+        str.append(NSAttributedString(string: isPeakTime() ? "🔥" : "❄️", attributes: [
             .font: NSFont.systemFont(ofSize: 12),
         ]))
         str.append(NSAttributedString(string: "\(s.quota.fiveHourPct)%", attributes: [
@@ -327,6 +337,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ]))
         button.attributedTitle = str
         button.toolTip = """
+        \(isPeakTime() ? "🔥 峰时" : "❄️ 闲时")（北京时间 工作日 14:00–18:00，2x 计费）
         Coding Plan 窗口: 5h \(s.quota.fiveHourPct)% · 周 \(s.quota.weekPct)%
         API 今日: \(fmtTokens(s.today.totalTokens)) · 近7天 \(fmtTokens(s.week.totalTokens))
         数据来源: \(s.source)
