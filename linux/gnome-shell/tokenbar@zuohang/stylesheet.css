@@ -22,3 +22,16 @@
 .tokenbar-pct-bad {
     color: #f66151;
 }
+
+/* DeepSeek 剩余预算（按美金：<10 红，<25 橙，其余绿） */
+.tokenbar-budget-ok {
+    color: #33d17a;
+}
+
+.tokenbar-budget-mid {
+    color: #ff7800;
+}
+
+.tokenbar-budget-bad {
+    color: #f66151;
+}

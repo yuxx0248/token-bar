@@ -1,8 +1,10 @@
 # TokenBar for Linux（GNOME Shell 扩展）
 
-macOS 菜单栏版 TokenBar 的 Linux 移植：GNOME 顶栏右上角常驻 `⚡5h% · wk%`，
-点击弹出完整面板（窗口进度 + 重置倒计时、今日 / 近 7 天用量、按模型明细、
-逐小时走势、立即刷新）。数据接口与 macOS 版完全一致（见顶层 README）。
+macOS 菜单栏版 TokenBar 的 Linux 移植：GNOME 顶栏右上角常驻 `⚡5h% · wk% · 🔥 $49.91`
+（Z.ai 窗口百分比 + DeepSeek 剩余预算，峰价 🔥 / 谷价 ❄️），点击弹出完整面板
+（Z.ai 窗口进度 + 重置倒计时、今日 / 近 7 天用量、按模型明细、逐小时走势；
+DeepSeek 余额、峰谷时段（美西时间）与今日 / 近 7 天按模型消耗）。Z.ai 数据接口
+与 macOS 版完全一致（见顶层 README）；DeepSeek 为 Linux 版新增。
 
 要求：GNOME Shell 45+（本机为 51）。无需任何额外依赖（Soup / St 均为 Shell 自带）。
 
@@ -13,6 +15,10 @@ cd linux/gnome-shell
 ./install.sh --api-key <你的 Z.ai API key>   # 写 key + 装扩展
 ./install.sh                                  # 只装扩展（之后可自行补 key）
 ```
+
+DeepSeek 凭证一般不用手动装：登录 DeepSeek Harness 后扩展自动读取其平台 token
+（Harness 重新登录轮换 token 后下次刷新自动跟随）。手动覆盖可用
+`./install.sh --ds-token <平台 token>`（写入 `~/.config/tokenbar/deepseek.json`）。
 
 - 扩展装到 `~/.local/share/gnome-shell/extensions/tokenbar@zuohang/`
 - **Wayland 下 GNOME Shell 只在启动时扫描扩展目录**，首次安装需要注销并重新登录
@@ -31,19 +37,34 @@ cd linux/gnome-shell
 key 在 z.ai 控制台（api.z.ai → API Keys）获取，与 ZCode 客户端用的是同一账号的 key，
 因此统计口径一致（账户级，含所有 agent）。`install.sh --api-key` 会写入第 1 个路径（0600）。
 
+### DeepSeek 凭证
+
+按顺序尝试两个路径：
+
+1. `~/.config/tokenbar/deepseek.json` → `{"token": "..."} `（手动覆盖，`install.sh --ds-token` 写入）
+2. `~/.dsh/.credentials.yaml` → DeepSeek Harness 登录后的平台 grant token
+   （`records → deepseek-account-platform/default → payload.token`），每次刷新重读，
+   Harness 重新登录轮换后自动跟随
+
+token 与 platform.deepseek.com 网页端同源（请求头 `x-dsh-auth-token`），余额、
+峰谷价与今日 / 近 7 天按模型消耗都来自平台接口。预算色：余额 <\$10 红、<\$25 橙、其余绿。
+峰谷价按官方口径（UTC 周一至五 01:00–04:00、06:00–10:00 峰价，其余半价）折算成美西时间显示；
+中国法定节假日全天谷价，节假日日历未内置，节假日会短暂显示为峰价（已知偏差）。
+
 ## 行为说明
 
 - 每 5 分钟自动刷新；打开菜单超过 30s 未刷新也会拉一次
-- 接口不可用（已有 key）→ 显示模拟数据，标题标注「模拟数据（接口不可用）」
-- 未配置 key → 不显示假数据，顶栏显示 `–`，面板里给出配置说明
-- `TOKENBAR_MOCK=1` 强制模拟数据（macOS 版同款）。GNOME 扩展跑在 gnome-shell 进程里，
-  需要让该进程看到变量：写入 `~/.config/environment.d/tokenbar.conf`（`TOKENBAR_MOCK=1`）
-  后重新登录
+- Z.ai 接口不可用（已有 key）→ GLM 部分显示模拟数据，标题标注「模拟数据（接口不可用）」
+- DeepSeek 接口不可用 → 不造假数据，DeepSeek 区块标注「接口不可用」；余额/金额不演戏
+- 未配置 key → 不显示假数据，顶栏显示 `–`，面板里给出配置说明（Z.ai 与 DeepSeek 各自提示）
+- `TOKENBAR_MOCK=1` 强制模拟数据（含 DeepSeek 模拟余额，macOS 版同款）。GNOME 扩展跑在
+  gnome-shell 进程里，需要让该进程看到变量：写入 `~/.config/environment.d/tokenbar.conf`
+  （`TOKENBAR_MOCK=1`）后重新登录
 
 ## 测试 / 卸载 / 排错
 
 ```bash
-gjs -m test-lib.js    # lib.js 逻辑测试（格式化 / 解析 / URL），无 UI 无网络
+gjs -m test-lib.js    # lib.js 逻辑测试（格式化 / 解析 / URL / DeepSeek 峰谷），无 UI 无网络
 ./uninstall.sh        # 停用并删除扩展（Wayland 下重登后彻底生效）
 journalctl --user -o cat -f /usr/bin/gnome-shell | grep -i tokenbar  # 运行日志
 gsettings get org.gnome.shell disable-user-extensions  # 应为 false

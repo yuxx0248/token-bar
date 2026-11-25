@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # TokenBar GNOME Shell 扩展安装脚本
-#   ./install.sh [--api-key <Z.ai API key>]
+#   ./install.sh [--api-key <Z.ai API key>] [--ds-token <DeepSeek 平台 token>]
+# DeepSeek 凭证可选：登录 DeepSeek Harness 后会自动读取 ~/.dsh/.credentials.yaml；
+# --ds-token 只是手动覆盖（写入 ~/.config/tokenbar/deepseek.json）。
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,14 +10,16 @@ uuid="tokenbar@zuohang"
 dest="$HOME/.local/share/gnome-shell/extensions/$uuid"
 
 api_key=""
+ds_token=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --api-key) api_key="${2:?--api-key 需要一个值}"; shift 2 ;;
-        *) echo "用法: $0 [--api-key <Z.ai API key>]"; exit 1 ;;
+        --ds-token) ds_token="${2:?--ds-token 需要一个值}"; shift 2 ;;
+        *) echo "用法: $0 [--api-key <Z.ai API key>] [--ds-token <DeepSeek 平台 token>]"; exit 1 ;;
     esac
 done
 
-# 写入 API key（始终走 python3 保证 JSON 转义正确）
+# 写入凭证（始终走 python3 保证 JSON 转义正确）
 if [ -n "$api_key" ]; then
     cfg_dir="$HOME/.config/tokenbar"
     mkdir -m 700 -p "$cfg_dir"
@@ -35,6 +39,21 @@ with open(path, "w") as f:
 os.chmod(path, 0o600)
 EOF
     echo "✓ API key 已写入 $cfg"
+fi
+
+if [ -n "$ds_token" ]; then
+    cfg_dir="$HOME/.config/tokenbar"
+    mkdir -m 700 -p "$cfg_dir"
+    cfg="$cfg_dir/deepseek.json"
+    python3 - "$cfg" "$ds_token" <<'EOF'
+import json, os, sys
+path, key = sys.argv[1], sys.argv[2]
+with open(path, "w") as f:
+    json.dump({"token": key}, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+os.chmod(path, 0o600)
+EOF
+    echo "✓ DeepSeek token 已写入 $cfg"
 fi
 
 mkdir -p "$(dirname "$dest")"

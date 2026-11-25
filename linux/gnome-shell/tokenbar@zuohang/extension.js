@@ -1,7 +1,7 @@
 //
 //  extension.js — TokenBar GNOME Shell 扩展（macOS 菜单栏版的 Linux 移植）
 //
-//  顶栏：⚡<5h>% · <周>%，点击弹面板；数据源与刷新策略见顶层 README。
+//  顶栏：⚡<5h>% · <周>% · <峰/谷>$<余额>，点击弹面板；数据源与刷新策略见顶层 README。
 //  安装：linux/gnome-shell/install.sh（Wayland 首次安装需注销重登）
 //
 
@@ -19,8 +19,9 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as Lib from './lib.js';
 
 const API_BASE = 'https://api.z.ai';
+const DS_API_BASE = 'https://platform.deepseek.com';
 const REFRESH_SEC = 300;              // 数据自动刷新间隔（macOS 版同款）
-const RENDER_SEC = 30;                // 菜单重绘间隔（刷新重置倒计时等相对时间）
+const RENDER_SEC = 30;                // 菜单重绘间隔（刷新重置倒计时、峰/谷切换等相对时间）
 const OPEN_REFRESH_THROTTLE_SEC = 30; // 打开菜单触发刷新的最小间隔
 
 const Indicator = GObject.registerClass(
@@ -38,22 +39,51 @@ class TokenBarIndicator extends PanelMenu.Button {
         this._week = new St.Label({
             text: '–%', y_align: Clutter.ActorAlign.CENTER, style_class: 'tokenbar-dim',
         });
-        for (const w of [this._bolt, this._five, this._sep, this._week]) this.add_child(w);
+        this._dsSep = new St.Label({
+            text: ' · ', y_align: Clutter.ActorAlign.CENTER, style_class: 'tokenbar-dim',
+        });
+        this._dsIcon = new St.Label({
+            text: '', y_align: Clutter.ActorAlign.CENTER, style_class: 'tokenbar-dim',
+        });
+        this._dsBudget = new St.Label({
+            text: '', y_align: Clutter.ActorAlign.CENTER, style_class: 'tokenbar-strong tokenbar-dim',
+        });
+        for (const w of [this._bolt, this._five, this._sep, this._week,
+            this._dsSep, this._dsIcon, this._dsBudget]) this.add_child(w);
     }
 
     render(snap) {
-        if (!snap.quota.loaded && !snap.today.loaded) {
+        const glmLoaded = snap.quota.loaded || snap.today.loaded;
+        const ds = snap.ds;
+        const dsLoaded = !!ds && (ds.balance.loaded || ds.today.loaded || ds.week.loaded);
+        if (!glmLoaded && !dsLoaded) {
             // 没有任何真实数据（未配置 key 等）：显示 –
             this._five.text = '–%';
             this._five.style_class = 'tokenbar-strong tokenbar-dim';
             this._week.text = '–%';
             this._week.style_class = 'tokenbar-dim';
+            this._dsSep.visible = this._dsIcon.visible = this._dsBudget.visible = false;
             return;
         }
-        this._five.text = `${snap.quota.fiveHourPct}%`;
-        this._five.style_class = `tokenbar-strong ${Lib.pctClass(snap.quota.fiveHourPct)}`;
-        this._week.text = `${snap.quota.weekPct}%`;
-        this._week.style_class = Lib.pctClass(snap.quota.weekPct);
+        if (snap.quota.loaded) {
+            this._five.text = `${snap.quota.fiveHourPct}%`;
+            this._five.style_class = `tokenbar-strong ${Lib.pctClass(snap.quota.fiveHourPct)}`;
+            this._week.text = `${snap.quota.weekPct}%`;
+            this._week.style_class = Lib.pctClass(snap.quota.weekPct);
+        } else {
+            // GLM 不可用（或未配 key）但 DeepSeek 有数据：GLM 段显示 –，不让 0% 误导
+            this._five.text = '–%';
+            this._five.style_class = 'tokenbar-strong tokenbar-dim';
+            this._week.text = '–%';
+            this._week.style_class = 'tokenbar-dim';
+        }
+        const dsBal = ds && ds.balance.loaded;
+        this._dsSep.visible = this._dsIcon.visible = this._dsBudget.visible = dsBal;
+        if (dsBal) {
+            this._dsIcon.text = Lib.dsPeakIcon(new Date());
+            this._dsBudget.text = Lib.fmtMoney(ds.balance.balance, ds.balance.currency);
+            this._dsBudget.style_class = `tokenbar-strong ${Lib.budgetClass(ds.balance.balance)}`;
+        }
     }
 });
 
@@ -86,6 +116,7 @@ export default class TokenBarExtension extends Extension {
             });
         this._renderTimerId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, RENDER_SEC,
             () => {
+                this._indicator.render(this._snapshot); // 峰/谷图标与预算色随时间实时翻转
                 this._rebuildMenu();
                 return GLib.SOURCE_CONTINUE;
             });
@@ -123,8 +154,14 @@ export default class TokenBarExtension extends Extension {
             },
             today: {loaded: false, totalTokens: 0, totalCalls: 0, models: [], hourly: []},
             week: {loaded: false, totalTokens: 0, totalCalls: 0, models: [], hourly: []},
+            ds: {
+                balance: {loaded: false, currency: 'USD', balance: 0},
+                today: Lib.mergeDsUsage(null, null),
+                week: Lib.mergeDsUsage(null, null),
+            },
             source: '加载中…',
             noKey: false,
+            noDs: false,
             lastRefresh: null,
         };
     }
@@ -140,6 +177,23 @@ export default class TokenBarExtension extends Extension {
                 const [, bytes] = GLib.file_get_contents(path);
                 const key = Lib.extractApiKey(new TextDecoder().decode(bytes));
                 if (key) return key;
+            } catch { /* 文件不存在/不可读 → 尝试下一个路径 */ }
+        }
+        return null;
+    }
+
+    // DeepSeek 凭证：~/.config/tokenbar/deepseek.json 覆盖 → ~/.dsh/.credentials.yaml（Harness）
+    _readDsToken() {
+        const home = GLib.get_home_dir();
+        const paths = [
+            GLib.build_filenamev([home, '.config', 'tokenbar', 'deepseek.json']),
+            GLib.build_filenamev([home, '.dsh', '.credentials.yaml']),
+        ];
+        for (const path of paths) {
+            try {
+                const [, bytes] = GLib.file_get_contents(path);
+                const token = Lib.extractDshToken(new TextDecoder().decode(bytes));
+                if (token) return token;
             } catch { /* 文件不存在/不可读 → 尝试下一个路径 */ }
         }
         return null;
@@ -165,6 +219,38 @@ export default class TokenBarExtension extends Extension {
         return obj;
     }
 
+    async _fetchDsJSON(url, token) {
+        const msg = Soup.Message.new('GET', DS_API_BASE + url);
+        msg.request_headers.append('x-dsh-auth-token', token);
+        const bytes = await new Promise((resolve, reject) => {
+            this._session.send_and_read_async(msg, GLib.PRIORITY_DEFAULT, null,
+                (_session, result) => {
+                    try {
+                        resolve(this._session.send_and_read_finish(result));
+                    } catch (e) {
+                        reject(e);
+                    }
+                });
+        });
+        // 平台同样是 HTTP 200 包业务错误码（code/biz_code），两层都要查
+        if (msg.status_code !== Soup.Status.OK) throw new Error(`HTTP ${msg.status_code}`);
+        const obj = JSON.parse(new TextDecoder().decode(bytes.get_data()));
+        if (obj?.code !== 0 || obj?.data?.biz_code !== 0) {
+            throw new Error(`DS API error: ${obj?.data?.biz_msg ?? obj?.msg ?? 'unknown'}`);
+        }
+        return obj;
+    }
+
+    // 平台要求 start/end 对齐本地日界；tz 只传整小时部分，剩余分钟并入 start/end（平台 Web 同款逻辑）
+    _dsUsageUrl(path, startMs, endMs) {
+        const offsetSec = -new Date().getTimezoneOffset() * 60;
+        const whole = Math.floor(offsetSec / 3600) * 3600;
+        const rem = offsetSec - whole;
+        const s = Math.floor(startMs / 1000 + rem);
+        const e = Math.floor(endMs / 1000 + rem);
+        return `${path}?start=${s}&end=${e}&tz=${whole}`;
+    }
+
     async _refresh() {
         if (this._refreshing) return;
         this._refreshing = true;
@@ -172,52 +258,95 @@ export default class TokenBarExtension extends Extension {
             const now = new Date();
             const forcedMock = GLib.getenv('TOKENBAR_MOCK') === '1';
             const key = forcedMock ? null : this._readApiKey();
+            const dsToken = forcedMock ? null : this._readDsToken();
             const s = this._emptySnapshot();
-            let noKey = false;
+            const empty = part => this._emptySnapshot()[part];
 
-            if (!key) {
-                noKey = !forcedMock;
-            } else {
-                const todayStart = new Date(now);
-                todayStart.setHours(0, 0, 0, 0);
-                const end = new Date(now);
-                end.setHours(23, 59, 59, 999);
-                const weekStart = new Date(todayStart);
-                weekStart.setDate(weekStart.getDate() - 6);
+            const todayStart = new Date(now);
+            todayStart.setHours(0, 0, 0, 0);
+            const end = new Date(now);
+            end.setHours(23, 59, 59, 999);
+            const weekStart = new Date(todayStart);
+            weekStart.setDate(weekStart.getDate() - 6);
+            const tomorrowStart = todayStart.getTime() + 86400e3;
 
-                const [quota, today, week] = await Promise.all([
-                    this._fetchJSON('/api/monitor/usage/quota/limit', key)
-                        .then(Lib.parseQuota)
-                        .catch(() => this._emptySnapshot().quota),
-                    this._fetchJSON(Lib.usageUrl(todayStart.getTime(), end.getTime()), key)
-                        .then(Lib.parseModelUsage)
-                        .catch(() => this._emptySnapshot().today),
-                    this._fetchJSON(Lib.usageUrl(weekStart.getTime(), end.getTime()), key)
-                        .then(Lib.parseModelUsage)
-                        .catch(() => this._emptySnapshot().week),
+            const [quota, today, week, dsBalance, dsCostToday, dsCostWeek, dsAmountToday, dsAmountWeek] =
+                await Promise.all([
+                    key
+                        ? this._fetchJSON('/api/monitor/usage/quota/limit', key)
+                            .then(Lib.parseQuota).catch(() => empty('quota'))
+                        : empty('quota'),
+                    key
+                        ? this._fetchJSON(Lib.usageUrl(todayStart.getTime(), end.getTime()), key)
+                            .then(Lib.parseModelUsage).catch(() => empty('today'))
+                        : empty('today'),
+                    key
+                        ? this._fetchJSON(Lib.usageUrl(weekStart.getTime(), end.getTime()), key)
+                            .then(Lib.parseModelUsage).catch(() => empty('week'))
+                        : empty('week'),
+                    dsToken
+                        ? this._fetchDsJSON('/api/v0/users/get_user_summary', dsToken)
+                            .then(Lib.parseDsBalance).catch(() => empty('ds').balance)
+                        : empty('ds').balance,
+                    dsToken
+                        ? this._fetchDsJSON(
+                            this._dsUsageUrl('/api/v0/usage/by_api_key/cost',
+                                todayStart.getTime(), tomorrowStart), dsToken)
+                            .then(Lib.parseDsCost).catch(() => null)
+                        : null,
+                    dsToken
+                        ? this._fetchDsJSON(
+                            this._dsUsageUrl('/api/v0/usage/by_api_key/cost',
+                                weekStart.getTime(), tomorrowStart), dsToken)
+                            .then(Lib.parseDsCost).catch(() => null)
+                        : null,
+                    dsToken
+                        ? this._fetchDsJSON(
+                            this._dsUsageUrl('/api/v0/usage/by_api_key/amount',
+                                todayStart.getTime(), tomorrowStart), dsToken)
+                            .then(Lib.parseDsAmount).catch(() => null)
+                        : null,
+                    dsToken
+                        ? this._fetchDsJSON(
+                            this._dsUsageUrl('/api/v0/usage/by_api_key/amount',
+                                weekStart.getTime(), tomorrowStart), dsToken)
+                            .then(Lib.parseDsAmount).catch(() => null)
+                        : null,
                 ]);
-                s.quota = quota;
-                s.today = today;
-                s.week = week;
-            }
+            s.quota = quota;
+            s.today = today;
+            s.week = week;
+            s.ds.balance = dsBalance;
+            s.ds.today = Lib.mergeDsUsage(dsCostToday, dsAmountToday);
+            s.ds.week = Lib.mergeDsUsage(dsCostWeek, dsAmountWeek);
 
-            // 全部失败（或强制模拟）→ 展示模拟数据便于看 UI；未配置 key 则不造假数据
-            if (forcedMock || (!noKey && !s.quota.loaded && !s.today.loaded)) {
-                const mock = Lib.mockSnapshot(now.getTime());
+            const noKey = !key;
+            const glmFailed = !s.quota.loaded && !s.today.loaded;
+            const src = Lib.sourceLabel(s.quota.loaded, s.quota.level, s.today.loaded); // 按真实抓取结果标注
+
+            // GLM 全部失败（或强制模拟）→ 模拟数据便于看 UI；未配置 key 则不造假数据。
+            // DeepSeek 失败只标注不造假（余额/金额不演戏）；仅强制模拟时才给 DeepSeek 模拟值。
+            const mock = (forcedMock || (!noKey && glmFailed)) ? Lib.mockSnapshot(now.getTime()) : null;
+            if (mock) {
                 s.quota = mock.quota;
                 s.today = mock.today;
                 s.week = mock.week;
+                if (forcedMock) s.ds = mock.ds;
             }
-            const src = Lib.sourceLabel(s.quota.loaded, s.quota.level, s.today.loaded);
-            s.source = src ?? (noKey
-                ? '未配置 API key'
-                : forcedMock ? '模拟数据（TOKENBAR_MOCK）' : '模拟数据（接口不可用）');
+            const dsLoaded = s.ds.balance.loaded || s.ds.today.loaded || s.ds.week.loaded;
+            s.source = src ?? (mock
+                ? (forcedMock ? '模拟数据（TOKENBAR_MOCK）' : '模拟数据（接口不可用）')
+                : dsLoaded ? 'DeepSeek 平台账户'
+                    : noKey ? '未配置 API key' : '接口不可用');
             s.noKey = noKey;
+            s.noDs = !dsToken;
             s.lastRefresh = now;
             this._lastRefreshAt = now.getTime();
             this._snapshot = s;
             log(`TokenBar refresh: ${s.source} 5h=${s.quota.fiveHourPct}% week=${s.quota.weekPct}% ` +
-                `today=${Lib.fmtTokens(s.today.totalTokens)}/${s.today.totalCalls}`);
+                `today=${Lib.fmtTokens(s.today.totalTokens)}/${s.today.totalCalls} ` +
+                `ds=${s.ds.balance.loaded ? '$' + s.ds.balance.balance : '–'} ` +
+                `dsToday=${s.ds.today.hasCost ? '$' + s.ds.today.totalCost : '–'}`);
         } catch (e) {
             logError(e, 'TokenBar refresh');
         } finally {
@@ -259,27 +388,69 @@ export default class TokenBarExtension extends Extension {
             this._addInfo(menu, `<small>${Lib.resetText(s.quota.weekResetMs, Date.now())}</small>`);
         }
 
-        if (s.today.loaded) {
+        // MARK: DeepSeek（余额 + 峰谷；明细在下方今日/近 7 天区块里）
+        const dsAny = s.ds.balance.loaded || s.ds.today.loaded || s.ds.week.loaded;
+        if (dsAny || s.noDs) {
             menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-            this._addInfo(menu, '<small>今日 API 用量（账户级 · 含所有 agent）</small>');
-            this._addInfo(menu,
-                `<tt>${Lib.fmtTokens(s.today.totalTokens)}</tt> tokens · <tt>${Lib.fmtCalls(s.today.totalCalls)}</tt> 次调用`);
-            for (const m of s.today.models.slice(0, 4)) {
-                this._addInfo(menu, `${Lib.esc(m.name)}  <tt>${Lib.fmtTokens(m.tokens)}</tt>`);
+            this._addInfo(menu, '<small>DeepSeek 用量</small>');
+            if (s.ds.balance.loaded) {
+                const b = s.ds.balance;
+                this._addInfo(menu,
+                    `<span foreground="${Lib.budgetColorHex(b.balance)}">余额 ${Lib.fmtMoney(b.balance, b.currency)}</span>`);
             }
-            if (s.today.hourly.length) {
-                const spark = Lib.sparkline(Lib.trimTrailingZeros(s.today.hourly));
-                this._addInfo(menu, Lib.sparkMarkup(spark));
+            if (s.ds.today.loaded && s.ds.today.hasCost) {
+                this._addInfo(menu,
+                    `<small>今日已用 <tt>${Lib.fmtMoney(s.ds.today.totalCost, s.ds.today.currency)}</tt>` +
+                    `${s.ds.today.totalTokens ? ` · <tt>${Lib.fmtTokens(s.ds.today.totalTokens)}</tt> tokens` : ''}</small>`);
+            }
+            this._addInfo(menu,
+                `<small>峰价（太平洋时间）<tt>${Lib.esc(Lib.dsPeakWindowsPacific(Date.now()))}</tt> · 周一至五</small>`);
+            this._addInfo(menu,
+                `<small>当前 ${Lib.esc(Lib.dsStateText(Date.now()))}，其余时段 ❄️ 半价（周末、节假日全天谷价）</small>`);
+            if (s.noDs) {
+                this._addInfo(menu, '<small>未读取到 DeepSeek 凭证：登录 DeepSeek Harness 后自动读取</small>');
+                this._addInfo(menu, '<tt>~/.dsh/.credentials.yaml</tt>');
+                this._addInfo(menu,
+                    '<small>或写入 <tt>~/.config/tokenbar/deepseek.json</tt>（{"token": "..."}）</small>');
+            } else if (!dsAny) {
+                this._addInfo(menu,
+                    '<small>DeepSeek 接口不可用（重新登录 Harness 轮换凭证后会自动恢复）</small>');
             }
         }
 
-        if (s.week.loaded) {
+        if (s.today.loaded || s.ds.today.loaded) {
             menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-            this._addInfo(menu, '<small>近 7 天 API 用量</small>');
-            this._addInfo(menu,
-                `<tt>${Lib.fmtTokens(s.week.totalTokens)}</tt> tokens · <tt>${Lib.fmtCalls(s.week.totalCalls)}</tt> 次调用`);
-            for (const m of s.week.models.slice(0, 4)) {
-                this._addInfo(menu, `${Lib.esc(m.name)}  <tt>${Lib.fmtTokens(m.tokens)}</tt>`);
+            if (s.today.loaded) {
+                this._addInfo(menu, '<small>今日 API 用量（账户级 · 含所有 agent）</small>');
+                this._addInfo(menu,
+                    `<tt>${Lib.fmtTokens(s.today.totalTokens)}</tt> tokens · <tt>${Lib.fmtCalls(s.today.totalCalls)}</tt> 次调用`);
+                for (const m of s.today.models.slice(0, 4)) {
+                    this._addInfo(menu, `${Lib.esc(m.name)}  <tt>${Lib.fmtTokens(m.tokens)}</tt>`);
+                }
+                if (s.today.hourly.length) {
+                    const spark = Lib.sparkline(Lib.trimTrailingZeros(s.today.hourly));
+                    this._addInfo(menu, Lib.sparkMarkup(spark));
+                }
+            }
+            if (s.ds.today.loaded) {
+                this._addInfo(menu, '<small>DeepSeek · 今日 API 用量</small>');
+                this._addDsUsageLines(menu, s.ds.today);
+            }
+        }
+
+        if (s.week.loaded || s.ds.week.loaded) {
+            menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            if (s.week.loaded) {
+                this._addInfo(menu, '<small>近 7 天 API 用量</small>');
+                this._addInfo(menu,
+                    `<tt>${Lib.fmtTokens(s.week.totalTokens)}</tt> tokens · <tt>${Lib.fmtCalls(s.week.totalCalls)}</tt> 次调用`);
+                for (const m of s.week.models.slice(0, 4)) {
+                    this._addInfo(menu, `${Lib.esc(m.name)}  <tt>${Lib.fmtTokens(m.tokens)}</tt>`);
+                }
+            }
+            if (s.ds.week.loaded) {
+                this._addInfo(menu, '<small>DeepSeek · 近 7 天 API 用量</small>');
+                this._addDsUsageLines(menu, s.ds.week);
             }
         }
 
@@ -309,6 +480,24 @@ export default class TokenBarExtension extends Extension {
             }
         });
         menu.addMenuItem(disable);
+    }
+
+    // DeepSeek 用量明细：合计行（金额 · tokens · 调用）+ 按模型行 + 今日小时走势
+    _addDsUsageLines(menu, u) {
+        const parts = [];
+        if (u.hasCost) parts.push(`<tt>${Lib.fmtMoney(u.totalCost, u.currency)}</tt>`);
+        if (u.totalTokens || u.totalCalls) {
+            parts.push(`<tt>${Lib.fmtTokens(u.totalTokens)}</tt> tokens`);
+            parts.push(`<tt>${Lib.fmtCalls(u.totalCalls)}</tt> 次调用`);
+        }
+        if (parts.length) this._addInfo(menu, parts.join(' · '));
+        for (const m of u.models.slice(0, 4)) {
+            const cost = u.hasCost ? ` · <tt>${Lib.fmtMoney(m.cost, u.currency)}</tt>` : '';
+            this._addInfo(menu, `${Lib.esc(m.name)}  <tt>${Lib.fmtTokens(m.tokens)}</tt>${cost}`);
+        }
+        if (u.hourly.length > 1) {
+            this._addInfo(menu, Lib.sparkMarkup(Lib.sparkline(Lib.trimTrailingZeros(u.hourly))));
+        }
     }
 
     _addInfo(menu, markup) {

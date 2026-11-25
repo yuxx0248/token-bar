@@ -1,11 +1,16 @@
-# TokenBar — Z.ai / GLM Coding Plan 用量菜单栏插件（原型）
+# TokenBar — Z.ai/GLM Coding Plan + DeepSeek 用量菜单栏插件（原型）
 
-在系统菜单栏/顶栏显示 **Z.ai 账户用量**：Coding Plan 5h/周窗口百分比，
-以及账户级 API 用量（覆盖所有 agent——其他 agent 用同一账号消耗的用量都算在内）。
+在系统菜单栏/顶栏显示两路用量：
 
-菜单栏标题：`⚡5h% · wk%`（按百分比红黄绿着色）。
-点击展开下拉面板：今日 / 近 7 天总用量与调用次数、按模型明细（GLM-5.3、Flash…）、
-今日逐小时用量走势（字符走势图）、窗口进度条 + 重置倒计时、立即刷新。
+- **Z.ai（GLM Coding Plan）**：Coding Plan 5h/周窗口百分比，以及账户级 API 用量
+  （覆盖所有 agent——其他 agent 用同一账号消耗的用量都算在内）。
+- **DeepSeek（充值余额制）**：钱包剩余预算（美金额度实时显示，<\$10 红、<\$25 橙、其余绿），
+  峰/谷价实时状态（🔥 峰价 / ❄️ 谷价）与今日 / 近 7 天按模型消耗金额。
+
+菜单栏标题：`⚡5h% · wk% · 🔥 $49.91`（百分比红黄绿着色；预算按余额着色）。
+点击展开下拉面板：GLM 窗口进度条 + 重置倒计时、今日 / 近 7 天总用量与调用次数、
+按模型明细（GLM-5.3、Flash…）、今日逐小时用量走势（字符走势图）、
+DeepSeek 余额与峰谷时段（折算美西时间）、立即刷新。
 
 ## 平台
 
@@ -14,7 +19,11 @@
 | macOS | [`macos/`](macos/) | 菜单栏 AppKit 应用（Swift 单文件） | `swiftc -O -o TokenBar main.swift && ./TokenBar` |
 | Linux (GNOME) | [`linux/`](linux/) | GNOME Shell 扩展（GJS） | 见 [linux/README.md](linux/README.md) |
 
+DeepSeek 维度目前仅 Linux 版实现（macOS 版尚未同步）。
+
 ## 数据来源
+
+### Z.ai / GLM
 
 `GET https://api.z.ai/api/monitor/usage/...`（与 ZCode 客户端 / z.ai 官网控制台同款接口，账户级统计）
 
@@ -24,5 +33,17 @@
 - 请求头 `authorization` 直接传 key（不加 Bearer 前缀）
 - 每 5 分钟自动刷新，打开菜单也会刷新
 - 接口不可用时显示模拟数据（面板标题标注），便于纯 UI 评审
+
+### DeepSeek
+
+`GET https://platform.deepseek.com/api/v0/...`（与 DeepSeek 平台官网 / DeepSeek Harness 同源，余额制）
+
+- `GET /api/v0/users/get_user_summary` → 钱包余额（充值钱包 + 赠送钱包合并，单位随钱包币种，本机为 USD）
+- `GET /api/v0/usage/by_api_key/cost?start=<sec>&end=<sec>&tz=<偏移秒>` → 按模型消耗金额（今日 / 近 7 天各查一次；`start/end` 必须对齐本地日界，`tz` 传本地偏移的整小时部分）
+- `GET /api/v0/usage/by_api_key/amount?…` → 按模型 token（cache hit/miss + response）与请求次数
+- 请求头 `x-dsh-auth-token` 传 DeepSeek Harness 的平台 token
+- 峰谷价（官方定价）：🔥 峰价 = UTC 周一至五 01:00–04:00、06:00–10:00；其余 ❄️ 谷价半价
+  （周末、中国法定节假日全天谷价；节假日日历未内置，节假日会短暂显示为峰价）。面板中折算成美西时间显示。
+- 余额 <\$10 红、<\$25 橙、其余绿；接口失败只标注不造假
 
 API key 的存放位置各平台不同，见各平台 README。

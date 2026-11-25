@@ -135,6 +135,137 @@ eq(Lib.resetText(null, Date.now()), '—', 'resetText missing');
 const mock = Lib.mockSnapshot(Date.now());
 eq(mock.quota.loaded && mock.today.loaded && mock.week.loaded, true, 'mock loaded');
 eq(mock.today.hourly.length, 24, 'mock hourly 24');
+eq(mock.ds.balance.loaded && mock.ds.today.loaded && mock.ds.week.loaded, true, 'mock ds loaded');
+
+// MARK: DeepSeek 金额 / 预算色
+
+eq(Lib.fmtMoney(49.912392548, 'USD'), '$49.91', 'fmtMoney USD');
+eq(Lib.fmtMoney(12.34, 'CNY'), '¥12.34', 'fmtMoney CNY');
+eq(Lib.fmtMoney('abc', 'USD'), '$0.00', 'fmtMoney bad input');
+eq(Lib.budgetClass(9.99), 'tokenbar-budget-bad', 'budgetClass <10 red');
+eq(Lib.budgetClass(10), 'tokenbar-budget-mid', 'budgetClass 10 orange');
+eq(Lib.budgetClass(24.99), 'tokenbar-budget-mid', 'budgetClass <25 orange');
+eq(Lib.budgetClass(25), 'tokenbar-budget-ok', 'budgetClass 25 green');
+eq(Lib.budgetColorHex(5), '#f66151', 'budgetColorHex red');
+eq(Lib.budgetColorHex(15), '#ff7800', 'budgetColorHex orange');
+eq(Lib.budgetColorHex(100), '#33d17a', 'budgetColorHex green');
+
+// MARK: DeepSeek 峰谷（官方：UTC 周一至五 01:00–04:00、06:00–10:00 峰价，其余半价）
+
+eq(Lib.isDeepSeekPeak(new Date('2026-11-25T02:00:00Z')), true, 'peak Wed 02:00Z');    // 周三
+eq(Lib.isDeepSeekPeak(new Date('2026-11-25T03:59:00Z')), true, 'peak window1 edge');
+eq(Lib.isDeepSeekPeak(new Date('2026-11-25T04:00:00Z')), false, 'valley 04:00Z gap');
+eq(Lib.isDeepSeekPeak(new Date('2026-11-25T05:00:00Z')), false, 'valley Wed 05:00Z');
+eq(Lib.isDeepSeekPeak(new Date('2026-11-25T07:00:00Z')), true, 'peak Wed 07:00Z window2');
+eq(Lib.isDeepSeekPeak(new Date('2026-11-25T09:59:00Z')), true, 'peak window2 edge');
+eq(Lib.isDeepSeekPeak(new Date('2026-11-25T10:00:00Z')), false, 'valley 10:00Z after');
+eq(Lib.isDeepSeekPeak(new Date('2026-11-21T02:00:00Z')), false, 'valley Saturday');
+eq(Lib.isDeepSeekPeak(new Date('2026-11-22T07:00:00Z')), false, 'valley Sunday');
+eq(Lib.isDeepSeekPeak(new Date('2026-11-20T07:00:00Z')), true, 'peak Friday');
+eq(Lib.dsPeakIcon(new Date('2026-11-25T02:00:00Z')), '🔥', 'icon peak flame');
+eq(Lib.dsPeakIcon(new Date('2026-11-25T05:00:00Z')), '❄️', 'icon valley snow');
+
+// 峰价窗口折算美西：冬季 PST(UTC-8)=17–20 · 22–02；夏季 PDT(UTC-7) 顺延 1h
+eq(Lib.dsPeakWindowsPacific(new Date('2026-01-15T12:00:00Z')), '17:00–20:00 · 22:00–02:00',
+    'peak windows PST');
+eq(Lib.dsPeakWindowsPacific(new Date('2026-07-15T12:00:00Z')), '18:00–21:00 · 23:00–03:00',
+    'peak windows PDT');
+eq(Lib.dsStateText(new Date('2026-11-25T02:00:00Z')).includes('🔥 峰价 · 太平洋 18:00'), true,
+    'dsStateText peak PST');
+eq(Lib.dsStateText(new Date('2026-11-25T05:00:00Z')).includes('❄️ 谷价'), true,
+    'dsStateText valley');
+
+// MARK: DeepSeek 凭证读取
+
+eq(Lib.extractDshToken('{"token": " tok1 "}'), 'tok1', 'dsh token json override');
+const yamlCred = `version: 1
+records:
+  client-connection/browser-session:
+    kind: grant
+    payload:
+      version: 1
+      secret: AAAA
+  deepseek-account-platform/device:
+    kind: grant
+    payload:
+      id: dev-id
+  deepseek-account-platform/default:
+    kind: grant
+    payload:
+      version: 1
+      token: TOK123
+      issuer: https://platform.deepseek.com
+`;
+eq(Lib.extractDshToken(yamlCred), 'TOK123', 'dsh token yaml default record');
+eq(Lib.extractDshToken('records: {}\n'), null, 'dsh token missing record');
+eq(Lib.extractDshToken(''), null, 'dsh token empty');
+
+// MARK: DeepSeek 接口解析
+
+const dsBalFixture = {code: 0, msg: '', data: {biz_code: 0, biz_msg: '', biz_data: {
+    normal_wallets: [{currency: 'USD', balance: '49.9123925480000000', token_estimation: '0'}],
+    bonus_wallets: [{currency: 'USD', balance: '0', token_estimation: '0'}],
+    total_costs: [{currency: 'USD', amount: '0.0876074520000000'}],
+}}};
+const dsBal = Lib.parseDsBalance(dsBalFixture);
+eq(dsBal, {loaded: true, currency: 'USD', balance: 49.91}, 'ds balance merged');
+eq(Lib.parseDsBalance({code: 0, data: {biz_code: 1, biz_msg: 'INVALID_PARAM', biz_data: null}}).loaded,
+    false, 'ds balance biz error');
+eq(Lib.parseDsBalance({detail: 'Not Found'}).loaded, false, 'ds balance http json error');
+
+// cost：单日窗口 bucket=3600 → 小时走势；7 天窗口 bucket=86400 → 无走势
+const mkCost = bucket => ({code: 0, msg: '', data: {biz_code: 0, biz_msg: '', biz_data: {
+    start: 1000, end: 1000 + 3600 * 24, bucket,
+    models: ['deepseek-flash'], functions: [],
+    data: [{currency: 'USD', series: [
+        {api_key: {tracking_id: 't1', name: 'DeepSeek Harness'}, model: 'deepseek-flash',
+            buckets: [{time: 1000, cost: '0.0876074520000000'}, {time: 4600, cost: '0.0124'}]},
+        ],
+        function_series: []},
+    ]}}});
+const dsCostDay = Lib.parseDsCost(mkCost(3600));
+eq(dsCostDay.loaded, true, 'ds cost loaded');
+eq(dsCostDay.total, 0.100007, 'ds cost total');
+eq(dsCostDay.currency, 'USD', 'ds cost currency');
+eq(dsCostDay.models, [{name: 'deepseek-flash', cost: 0.100007}], 'ds cost models');
+eq(dsCostDay.hourly[0], 0.087607, 'ds cost hourly[0]');
+eq(dsCostDay.hourly[1], 0.0124, 'ds cost hourly[1]');
+eq(dsCostDay.hourly.length, 24, 'ds cost hourly length');
+eq(Lib.parseDsCost(mkCost(86400)).hourly, [], 'ds cost weekly no hourly');
+eq(Lib.parseDsCost({code: 0, data: {biz_code: 1, biz_data: null}}).loaded, false, 'ds cost biz error');
+
+// amount：token = cache hit + miss + response；调用次数含 function_series
+const dsAmtFixture = {code: 0, msg: '', data: {biz_code: 0, biz_msg: '', biz_data: {
+    start: 1000, end: 4600, bucket: 3600,
+    models: ['deepseek-flash'], functions: [],
+    series: [{api_key: {tracking_id: 't1'}, model: 'deepseek-flash', buckets: [
+        {time: 1000, usage: {
+            RESPONSE_TOKEN: 27929, REQUEST: 39,
+            PROMPT_CACHE_HIT_TOKEN: 2328192, PROMPT_CACHE_MISS_TOKEN: 133745}},
+        {time: 4600, usage: {RESPONSE_TOKEN: 71, REQUEST: 1,
+            PROMPT_CACHE_HIT_TOKEN: 8, PROMPT_CACHE_MISS_TOKEN: 0}},
+    ]}],
+    function_series: [{api_key: {tracking_id: 't1'}, model: 'deepseek-flash', unit: 'USD', buckets: [
+        {time: 1000, usage: {FUNCTION_CALL: 2, REQUEST: 3}},
+    ]}],
+}}};
+const dsAmt = Lib.parseDsAmount(dsAmtFixture);
+eq(dsAmt.loaded, true, 'ds amount loaded');
+eq(dsAmt.totalTokens, 2489866 + 79, 'ds amount tokens (hit+miss+response)');
+eq(dsAmt.totalCalls, 43, 'ds amount calls incl function series');
+eq(dsAmt.models, [{name: 'deepseek-flash', tokens: 2489945, calls: 43}], 'ds amount models');
+
+const dsMerged = Lib.mergeDsUsage(dsCostDay, dsAmt);
+eq(dsMerged.loaded && dsMerged.hasCost, true, 'ds merge flags');
+eq(dsMerged.currency, 'USD', 'ds merge currency');
+eq(dsMerged.totalCost, 0.100007, 'ds merge cost');
+eq(dsMerged.totalTokens, 2489945, 'ds merge tokens');
+eq(dsMerged.models, [{name: 'deepseek-flash', cost: 0.100007, tokens: 2489945, calls: 43}],
+    'ds merge models joined');
+eq(Lib.mergeDsUsage(null, null),
+    {loaded: false, hasCost: false, currency: 'USD', totalCost: 0, totalTokens: 0, totalCalls: 0,
+        models: [], hourly: []},
+    'ds merge empty');
 
 console.log(failed ? `\n${failed} test(s) FAILED` : '\nall ok');
 if (failed) throw new Error(`${failed} test(s) failed`);
