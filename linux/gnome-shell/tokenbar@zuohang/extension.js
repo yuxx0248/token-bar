@@ -380,40 +380,35 @@ export default class TokenBarExtension extends Extension {
         menu.removeAll();
         const s = this._snapshot;
 
-        this._addInfo(menu, `<b>Z.ai 用量</b>  <small>${Lib.esc(s.source)}</small>`);
+        this._addInfo(menu, `<b>Z.ai / DeepSeek 用量</b>  <small>${Lib.esc(s.source)}</small>`);
         const peak = Lib.isPeakTime(Date.now());
         this._addInfo(menu,
             `<small>${peak ? '🔥 峰时' : '❄️ 闲时'} · ${Lib.esc(Lib.PEAK_DEF)} · ${peak ? '2x' : '1x'} 计费</small>`);
 
         if (s.quota.loaded) {
             // 只留百分比数字（不画进度条），窗口名 + 着色百分比一行，重置倒计时一行
-            menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            this._addSep(menu);
             this._addInfo(menu,
                 `<small>5 小时窗口（Coding Plan${s.quota.level ? ' · ' + Lib.esc(s.quota.level) : ''}）</small>` +
                 `  <span foreground="${Lib.pctColorHex(s.quota.fiveHourPct)}"><tt><b>${s.quota.fiveHourPct}%</b></tt></span>`);
             this._addInfo(menu, `<small>${Lib.resetText(s.quota.fiveHourResetMs, Date.now())}</small>`);
 
-            menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            this._addSep(menu);
             this._addInfo(menu,
                 `<small>周窗口（Coding Plan）</small>` +
                 `  <span foreground="${Lib.pctColorHex(s.quota.weekPct)}"><tt><b>${s.quota.weekPct}%</b></tt></span>`);
             this._addInfo(menu, `<small>${Lib.resetText(s.quota.weekResetMs, Date.now())}</small>`);
         }
 
-        // MARK: DeepSeek（余额 + 峰谷；明细在下方今日/近 7 天区块里）
+        // MARK: DeepSeek（余额 + 峰谷；模型明细合并在下方用量列表里）
         const dsAny = s.ds.balance.loaded || s.ds.today.loaded || s.ds.week.loaded;
         if (dsAny || s.noDs) {
-            menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-            this._addInfo(menu, '<small>DeepSeek 用量</small>');
+            this._addSep(menu);
+            this._addInfo(menu, '<small>DeepSeek</small>');
             if (s.ds.balance.loaded) {
                 const b = s.ds.balance;
                 this._addInfo(menu,
                     `<span foreground="${Lib.budgetColorHex(b.balance)}">余额 ${Lib.fmtMoney(b.balance, b.currency)}</span>`);
-            }
-            if (s.ds.today.loaded && s.ds.today.hasCost) {
-                this._addInfo(menu,
-                    `<small>今日已用 <tt>${Lib.fmtMoney(s.ds.today.totalCost, s.ds.today.currency)}</tt>` +
-                    `${s.ds.today.totalTokens ? ` · <tt>${Lib.fmtTokens(s.ds.today.totalTokens)}</tt> tokens` : ''}</small>`);
             }
             this._addInfo(menu,
                 `<small>峰价（太平洋时间）<tt>${Lib.esc(Lib.dsPeakWindowsPacific(Date.now()))}</tt> · 周一至五</small>`);
@@ -430,46 +425,24 @@ export default class TokenBarExtension extends Extension {
             }
         }
 
+        // MARK: 按模型用量（GLM + DeepSeek 合并一个列表，用了哪些列哪些）
         if (s.today.loaded || s.ds.today.loaded) {
-            menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-            if (s.today.loaded) {
-                this._addInfo(menu, '<small>今日 API 用量（账户级 · 含所有 agent）</small>');
-                this._addInfo(menu,
-                    `<tt>${Lib.fmtTokens(s.today.totalTokens)}</tt> tokens · <tt>${Lib.fmtCalls(s.today.totalCalls)}</tt> 次调用`);
-                for (const m of s.today.models.slice(0, 4)) {
-                    this._addInfo(menu, `${Lib.esc(m.name)}  <tt>${Lib.fmtTokens(m.tokens)}</tt>`);
-                }
-            }
-            if (s.ds.today.loaded) {
-                this._addInfo(menu, '<small>DeepSeek · 今日 API 用量</small>');
-                this._addDsUsageLines(menu, s.ds.today);
-            }
+            this._addSep(menu);
+            this._addUsageSection(menu, '今日 API 用量', s.today, s.ds.today);
         }
-
         if (s.week.loaded || s.ds.week.loaded) {
-            menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-            if (s.week.loaded) {
-                this._addInfo(menu, '<small>近 7 天 API 用量</small>');
-                this._addInfo(menu,
-                    `<tt>${Lib.fmtTokens(s.week.totalTokens)}</tt> tokens · <tt>${Lib.fmtCalls(s.week.totalCalls)}</tt> 次调用`);
-                for (const m of s.week.models.slice(0, 4)) {
-                    this._addInfo(menu, `${Lib.esc(m.name)}  <tt>${Lib.fmtTokens(m.tokens)}</tt>`);
-                }
-            }
-            if (s.ds.week.loaded) {
-                this._addInfo(menu, '<small>DeepSeek · 近 7 天 API 用量</small>');
-                this._addDsUsageLines(menu, s.ds.week);
-            }
+            this._addSep(menu);
+            this._addUsageSection(menu, '近 7 天 API 用量', s.week, s.ds.week);
         }
 
         if (s.noKey) {
-            menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            this._addSep(menu);
             this._addInfo(menu, '<small>未读取到 API key，请写入：</small>');
             this._addInfo(menu, '<tt>~/.config/tokenbar/config.json</tt>');
             this._addInfo(menu, '<small>格式 {"apiKey": "..."}，或重跑 install.sh --api-key …</small>');
         }
 
-        menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this._addSep(menu);
         if (s.lastRefresh) {
             this._addInfo(menu, `<small>更新于 ${Lib.clockHM(s.lastRefresh)}，每 5 分钟自动刷新</small>`);
         }
@@ -490,23 +463,38 @@ export default class TokenBarExtension extends Extension {
         menu.addMenuItem(disable);
     }
 
-    // DeepSeek 用量明细：合计行（金额 · tokens · 调用）+ 按模型行 + 今日小时走势
-    _addDsUsageLines(menu, u) {
+    // 分隔线（收紧上下留白）
+    _addSep(menu) {
+        const sep = new PopupMenu.PopupSeparatorMenuItem();
+        sep.set_style('padding-top: 3px; padding-bottom: 3px;');
+        menu.addMenuItem(sep);
+    }
+
+    // GLM + DeepSeek 合并的按模型用量：用了哪些列哪些；能直接换算钱的（DeepSeek 有
+    // 真实计费）在模型行末尾括号里加金额。GLM 是订阅制没有直接费用，只列 token。
+    _addUsageSection(menu, title, glm, ds) {
         const parts = [];
-        if (u.hasCost) parts.push(`<tt>${Lib.fmtMoney(u.totalCost, u.currency)}</tt>`);
-        if (u.totalTokens || u.totalCalls) {
-            parts.push(`<tt>${Lib.fmtTokens(u.totalTokens)}</tt> tokens`);
-            parts.push(`<tt>${Lib.fmtCalls(u.totalCalls)}</tt> 次调用`);
+        if (glm.loaded && (glm.totalTokens || glm.totalCalls)) {
+            parts.push(`GLM <tt>${Lib.fmtTokens(glm.totalTokens)}</tt> tok · <tt>${Lib.fmtCalls(glm.totalCalls)}</tt> 次`);
         }
-        if (parts.length) this._addInfo(menu, parts.join(' · '));
-        for (const m of u.models.slice(0, 4)) {
-            const cost = u.hasCost ? ` · <tt>${Lib.fmtMoney(m.cost, u.currency)}</tt>` : '';
+        if (ds.loaded && ds.hasCost) {
+            parts.push(`DS <tt>${Lib.fmtMoney(ds.totalCost, ds.currency)}</tt>`);
+        }
+        this._addInfo(menu, `<small>${Lib.esc(title)}</small>${parts.length ? '  ' + parts.join(' · ') : ''}`);
+        const rows = [
+            ...glm.models.map(m => ({name: m.name, tokens: m.tokens, cost: null})),
+            ...ds.models.map(m => ({name: m.name, tokens: m.tokens, cost: ds.hasCost ? m.cost : null})),
+        ].sort((a, b) => b.tokens - a.tokens);
+        for (const m of rows.slice(0, 6)) {
+            const cost = m.cost != null ? `（约 ${Lib.fmtMoney(m.cost, ds.currency)}）` : '';
             this._addInfo(menu, `${Lib.esc(m.name)}  <tt>${Lib.fmtTokens(m.tokens)}</tt>${cost}`);
         }
     }
 
+    // 信息行（收紧行距：默认 popup 行 padding 偏大）
     _addInfo(menu, markup) {
         const item = new PopupMenu.PopupMenuItem('', {reactive: false});
+        item.set_style('padding-top: 2px; padding-bottom: 2px;');
         item.label.clutter_text.set_markup(markup);
         menu.addMenuItem(item);
         return item;
