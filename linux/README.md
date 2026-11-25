@@ -1,10 +1,11 @@
 # TokenBar for Linux（GNOME Shell 扩展）
 
-macOS 菜单栏版 TokenBar 的 Linux 移植：GNOME 顶栏右上角常驻 `⚡5h% · wk% · 🔥 $49.91`
-（Z.ai 窗口百分比 + DeepSeek 剩余预算，峰价 🔥 / 谷价 ❄️），点击弹出完整面板
-（Z.ai 窗口进度 + 重置倒计时、今日 / 近 7 天用量、按模型明细、逐小时走势；
-DeepSeek 余额、峰谷时段（美西时间）与今日 / 近 7 天按模型消耗）。Z.ai 数据接口
-与 macOS 版完全一致（见顶层 README）；DeepSeek 为 Linux 版新增。
+macOS 菜单栏版 TokenBar 的 Linux 移植：GNOME 顶栏**左上角**常驻
+`🔥44% · 19% · ❄️ $49.91`——GLM 段首图标为峰时状态（🔥 峰时 / ❄️ 闲时，按北京时间
+工作日 14:00–18:00 判定，峰时 2x 计费），百分比红黄绿着色；DeepSeek 段为峰谷价状态
++ 剩余预算（<\$10 红、<\$25 橙、其余绿）。点击弹出完整面板（GLM 峰时状态、窗口百分比
+仅数字 + 重置倒计时、今日 / 近 7 天用量、按模型明细；DeepSeek 余额、峰谷时段（美西时间）
+与按模型消耗）。Z.ai 数据接口与 macOS 版完全一致（见顶层 README）；DeepSeek 为 Linux 版新增。
 
 要求：GNOME Shell 45+（本机为 51）。无需任何额外依赖（Soup / St 均为 Shell 自带）。
 

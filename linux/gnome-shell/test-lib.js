@@ -117,6 +117,23 @@ eq(Lib.pctClass(95), 'tokenbar-pct-bad', 'pctClass 95');
 eq(Lib.pctClass(70), 'tokenbar-pct-warn', 'pctClass 70');
 eq(Lib.pctClass(10), 'tokenbar-pct-ok', 'pctClass 10');
 
+// MARK: 峰时状态（北京时间 = UTC+8；工作日 14:00–18:00 为峰时）
+
+eq(Lib.isPeakTime(Date.UTC(2026, 10, 10, 7, 0)), true, 'peak 周二 15:00 北京');      // 周二 15:00
+eq(Lib.isPeakTime(Date.UTC(2026, 10, 10, 5, 59)), false, 'offpeak 周二 13:59 北京'); // 周二 13:59
+eq(Lib.isPeakTime(Date.UTC(2026, 10, 10, 10, 0)), false, 'offpeak 周二 18:00 北京'); // 周二 18:00 整
+eq(Lib.isPeakTime(Date.UTC(2026, 10, 10, 9, 59)), true, 'peak 周二 17:59 北京');     // 周二 17:59
+eq(Lib.isPeakTime(Date.UTC(2026, 10, 14, 7, 0)), false, 'offpeak 周六 15:00 北京');  // 周六 15:00
+eq(Lib.isPeakTime(Date.UTC(2026, 10, 13, 7, 0)), true, 'peak 周五 15:00 北京');      // 周五（11-13）15:00
+eq(Lib.isPeakTime(Date.UTC(2026, 10, 16, 1, 0)), false, 'offpeak 周一 09:00 北京');  // 周一 09:00 不在 14–18 点
+eq(Lib.isPeakTime(Date.UTC(2026, 10, 13, 16, 30)), false,
+    'offpeak 周六 00:30 北京（UTC 周五 16:30，须按北京判断）');                        // 北京周六凌晨
+eq(Lib.isPeakTime(Date.UTC(2026, 10, 15, 16, 30)), false,
+    'offpeak 周日 00:30 北京');                                                       // 北京周日凌晨
+eq(Lib.peakIcon(Date.UTC(2026, 10, 10, 7, 0)), '🔥', 'peakIcon peak');
+eq(Lib.peakIcon(Date.UTC(2026, 10, 14, 7, 0)), '❄️', 'peakIcon offpeak');
+eq(Lib.PEAK_DEF.includes('14:00'), true, 'PEAK_DEF text');
+
 // MARK: 来源标注
 
 eq(Lib.sourceLabel(true, 'pro', true), '官方 · GLM Coding Pro + 账户级 API', 'sourceLabel full');

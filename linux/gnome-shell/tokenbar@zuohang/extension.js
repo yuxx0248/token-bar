@@ -1,7 +1,7 @@
 //
 //  extension.js — TokenBar GNOME Shell 扩展（macOS 菜单栏版的 Linux 移植）
 //
-//  顶栏：⚡<5h>% · <周>% · <峰/谷>$<余额>，点击弹面板；数据源与刷新策略见顶层 README。
+//  顶栏：<GLM峰谷><5h>% · <周>% · <DS峰谷>$<余额>（🔥峰 / ❄️谷），点击弹面板；数据源见顶层 README。
 //  安装：linux/gnome-shell/install.sh（Wayland 首次安装需注销重登）
 //
 
@@ -21,14 +21,18 @@ import * as Lib from './lib.js';
 const API_BASE = 'https://api.z.ai';
 const DS_API_BASE = 'https://platform.deepseek.com';
 const REFRESH_SEC = 300;              // 数据自动刷新间隔（macOS 版同款）
-const RENDER_SEC = 30;                // 菜单重绘间隔（刷新重置倒计时、峰/谷切换等相对时间）
+const RENDER_SEC = 30;                // 顶栏/菜单重绘间隔（重置倒计时、峰谷切换等相对时间）
 const OPEN_REFRESH_THROTTLE_SEC = 30; // 打开菜单触发刷新的最小间隔
 
 const Indicator = GObject.registerClass(
 class TokenBarIndicator extends PanelMenu.Button {
     _init() {
         super._init(0.0, 'TokenBar');
-        this._bolt = new St.Label({text: '⚡', y_align: Clutter.ActorAlign.CENTER});
+        // PanelMenu.Button 只稳定布局单个子 actor：四个 label 需包在一层 BoxLayout 里
+        this._box = new St.BoxLayout({style_class: 'tokenbar-box'});
+        this._peak = new St.Label({
+            text: Lib.peakIcon(Date.now()), y_align: Clutter.ActorAlign.CENTER,
+        });
         this._five = new St.Label({
             text: '–%', y_align: Clutter.ActorAlign.CENTER,
             style_class: 'tokenbar-strong tokenbar-dim',
@@ -48,11 +52,14 @@ class TokenBarIndicator extends PanelMenu.Button {
         this._dsBudget = new St.Label({
             text: '', y_align: Clutter.ActorAlign.CENTER, style_class: 'tokenbar-strong tokenbar-dim',
         });
-        for (const w of [this._bolt, this._five, this._sep, this._week,
-            this._dsSep, this._dsIcon, this._dsBudget]) this.add_child(w);
+        // PanelMenu.Button 只稳定布局单个子 actor：所有 label 包在一层 BoxLayout 里
+        for (const w of [this._peak, this._five, this._sep, this._week,
+            this._dsSep, this._dsIcon, this._dsBudget]) this._box.add_child(w);
+        this.add_child(this._box);
     }
 
     render(snap) {
+        this._peak.text = Lib.peakIcon(Date.now()); // GLM 峰时是纯时间推导，与数据无关
         const glmLoaded = snap.quota.loaded || snap.today.loaded;
         const ds = snap.ds;
         const dsLoaded = !!ds && (ds.balance.loaded || ds.today.loaded || ds.week.loaded);
@@ -99,7 +106,7 @@ export default class TokenBarExtension extends Extension {
         this._theme.load_stylesheet(this._stylesheet);
 
         this._indicator = new Indicator();
-        Main.panel.addToStatusArea('tokenbar', this._indicator);
+        Main.panel.addToStatusArea('tokenbar', this._indicator, 1, 'left'); // 左上角（appMenu 之后）
         this._menuOpenId = this._indicator.menu.connect('open-state-changed',
             (_menu, open) => {
                 if (open) this._onMenuOpen();
@@ -116,7 +123,7 @@ export default class TokenBarExtension extends Extension {
             });
         this._renderTimerId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, RENDER_SEC,
             () => {
-                this._indicator.render(this._snapshot); // 峰/谷图标与预算色随时间实时翻转
+                this._indicator.render(this._snapshot); // 峰谷图标与预算色随时间实时翻转
                 this._rebuildMenu();
                 return GLib.SOURCE_CONTINUE;
             });
@@ -374,17 +381,22 @@ export default class TokenBarExtension extends Extension {
         const s = this._snapshot;
 
         this._addInfo(menu, `<b>Z.ai 用量</b>  <small>${Lib.esc(s.source)}</small>`);
+        const peak = Lib.isPeakTime(Date.now());
+        this._addInfo(menu,
+            `<small>${peak ? '🔥 峰时' : '❄️ 闲时'} · ${Lib.esc(Lib.PEAK_DEF)} · ${peak ? '2x' : '1x'} 计费</small>`);
 
         if (s.quota.loaded) {
+            // 只留百分比数字（不画进度条），窗口名 + 着色百分比一行，重置倒计时一行
             menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
             this._addInfo(menu,
-                `<small>5 小时窗口（Coding Plan${s.quota.level ? ' · ' + Lib.esc(s.quota.level) : ''}）</small>`);
-            this._addInfo(menu, Lib.progressBar(s.quota.fiveHourPct));
+                `<small>5 小时窗口（Coding Plan${s.quota.level ? ' · ' + Lib.esc(s.quota.level) : ''}）</small>` +
+                `  <span foreground="${Lib.pctColorHex(s.quota.fiveHourPct)}"><tt><b>${s.quota.fiveHourPct}%</b></tt></span>`);
             this._addInfo(menu, `<small>${Lib.resetText(s.quota.fiveHourResetMs, Date.now())}</small>`);
 
             menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-            this._addInfo(menu, '<small>周窗口（Coding Plan）</small>');
-            this._addInfo(menu, Lib.progressBar(s.quota.weekPct));
+            this._addInfo(menu,
+                `<small>周窗口（Coding Plan）</small>` +
+                `  <span foreground="${Lib.pctColorHex(s.quota.weekPct)}"><tt><b>${s.quota.weekPct}%</b></tt></span>`);
             this._addInfo(menu, `<small>${Lib.resetText(s.quota.weekResetMs, Date.now())}</small>`);
         }
 
@@ -426,10 +438,6 @@ export default class TokenBarExtension extends Extension {
                     `<tt>${Lib.fmtTokens(s.today.totalTokens)}</tt> tokens · <tt>${Lib.fmtCalls(s.today.totalCalls)}</tt> 次调用`);
                 for (const m of s.today.models.slice(0, 4)) {
                     this._addInfo(menu, `${Lib.esc(m.name)}  <tt>${Lib.fmtTokens(m.tokens)}</tt>`);
-                }
-                if (s.today.hourly.length) {
-                    const spark = Lib.sparkline(Lib.trimTrailingZeros(s.today.hourly));
-                    this._addInfo(menu, Lib.sparkMarkup(spark));
                 }
             }
             if (s.ds.today.loaded) {
@@ -494,9 +502,6 @@ export default class TokenBarExtension extends Extension {
         for (const m of u.models.slice(0, 4)) {
             const cost = u.hasCost ? ` · <tt>${Lib.fmtMoney(m.cost, u.currency)}</tt>` : '';
             this._addInfo(menu, `${Lib.esc(m.name)}  <tt>${Lib.fmtTokens(m.tokens)}</tt>${cost}`);
-        }
-        if (u.hourly.length > 1) {
-            this._addInfo(menu, Lib.sparkMarkup(Lib.sparkline(Lib.trimTrailingZeros(u.hourly))));
         }
     }
 
