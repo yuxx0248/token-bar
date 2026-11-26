@@ -134,6 +134,10 @@ eq(Lib.peakIcon(Date.UTC(2026, 10, 10, 7, 0)), '🔥', 'peakIcon peak');
 eq(Lib.peakIcon(Date.UTC(2026, 10, 14, 7, 0)), '❄️', 'peakIcon offpeak');
 eq(Lib.PEAK_DEF.includes('14:00'), true, 'PEAK_DEF text');
 
+// GLM 峰时窗口折算美西：UTC 固定 06:00–10:00 → PST 22:00–02:00 / PDT 23:00–03:00
+eq(Lib.peakWindowsPacific(Date.UTC(2026, 0, 15, 12)), '22:00–02:00', 'GLM peak windows PST');
+eq(Lib.peakWindowsPacific(Date.UTC(2026, 6, 15, 12)), '23:00–03:00', 'GLM peak windows PDT');
+
 // MARK: 来源标注
 
 eq(Lib.sourceLabel(true, 'pro', true), '官方 · GLM Coding Pro + 账户级 API', 'sourceLabel full');

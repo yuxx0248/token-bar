@@ -78,6 +78,16 @@ export function peakIcon(nowMs) {
     return isPeakTime(nowMs) ? '🔥' : '❄️';
 }
 
+// GLM 峰时窗口（北京时间 工作日 14:00–18:00 = UTC 06:00–10:00，固定）折算成美西钟点：
+// PST 为 22:00–02:00，PDT 为 23:00–03:00（美西夏令时自动跟随）
+export function peakWindowsPacific(now) {
+    const d = now instanceof Date ? now : new Date(now);
+    const y = d.getUTCFullYear();
+    const m = d.getUTCMonth();
+    const day = d.getUTCDate();
+    return `${pacificHM(Date.UTC(y, m, day, 6))}–${pacificHM(Date.UTC(y, m, day, 10))}`;
+}
+
 // DeepSeek 剩余预算色（按美金计）：<10 红，<25 橙，其余绿
 const COLOR_MID = '#ff7800'; // GNOME 橙
 

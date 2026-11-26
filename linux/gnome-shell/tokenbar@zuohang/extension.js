@@ -383,7 +383,7 @@ export default class TokenBarExtension extends Extension {
         this._addInfo(menu, `<b>Z.ai / DeepSeek 用量</b>  <small>${Lib.esc(s.source)}</small>`);
         const peak = Lib.isPeakTime(Date.now());
         this._addInfo(menu,
-            `<small>${peak ? '🔥 峰时' : '❄️ 闲时'} · ${Lib.esc(Lib.PEAK_DEF)} · ${peak ? '2x' : '1x'} 计费</small>`);
+            `<small>${peak ? '🔥 峰时' : '❄️ 闲时'} · 峰时（太平洋时间）<tt>${Lib.esc(Lib.peakWindowsPacific(Date.now()))}</tt> · 工作日 · ${peak ? '2x' : '1x'} 计费</small>`);
 
         if (s.quota.loaded) {
             // 只留百分比数字（不画进度条），窗口名 + 着色百分比一行，重置倒计时一行
