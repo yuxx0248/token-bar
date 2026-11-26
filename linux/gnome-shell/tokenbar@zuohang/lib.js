@@ -258,17 +258,26 @@ export function parseQuota(obj) {
         const pct = Number(l?.percentage);
         const reset = Number(l?.nextResetTime);
         if (l?.type === 'TOKENS_LIMIT' && Number.isFinite(pct) && Number.isFinite(reset) && reset > 0) {
-            tokenLimits.push({reset, pct: Math.round(pct)});
+            tokenLimits.push({
+                reset, pct: Math.round(pct),
+                unit: Number(l?.unit), number: Number(l?.number),
+            });
         }
     }
-    tokenLimits.sort((a, b) => a.reset - b.reset);
-    if (tokenLimits.length > 0) {
-        q.fiveHourPct = tokenLimits[0].pct;
-        q.fiveHourResetMs = tokenLimits[0].reset;
+    // 窗口语义优先（官方：unit 3=小时 ×5 → 5h 窗口，消耗后 5h 滚动重置；unit 6 ×1 → 周
+    // 窗口，每 7 天重置）。按「重置时间远近」猜会在周三早上接反：那时 5h 的滚动重置点
+    // 可能晚于周窗口重置点。语义字段缺失时才回退到远近排序。
+    const bySem = (unit, number) => tokenLimits.find(l => l.unit === unit && l.number === number);
+    const sorted = [...tokenLimits].sort((a, b) => a.reset - b.reset);
+    const fiveH = bySem(3, 5) ?? sorted[0];
+    const week = bySem(6, 1) ?? (sorted.length > 1 ? sorted[sorted.length - 1] : null);
+    if (fiveH) {
+        q.fiveHourPct = fiveH.pct;
+        q.fiveHourResetMs = fiveH.reset;
     }
-    if (tokenLimits.length > 1) {
-        q.weekPct = tokenLimits[tokenLimits.length - 1].pct;
-        q.weekResetMs = tokenLimits[tokenLimits.length - 1].reset;
+    if (week && week !== fiveH) {
+        q.weekPct = week.pct;
+        q.weekResetMs = week.reset;
     }
     return q;
 }

@@ -63,7 +63,7 @@ eq(Lib.extractApiKey('{"apiKey":"  "}'), null, 'key blank');
 eq(Lib.extractApiKey('not json'), null, 'key bad json');
 eq(Lib.extractApiKey('{"other":1}'), null, 'key missing');
 
-// MARK: quota/limit 解析（最近重置=5h，最远=周；非 TOKENS_LIMIT 忽略）
+// MARK: quota/limit 解析（窗口语义字段优先；无语义字段回退重置时间远近；非 TOKENS_LIMIT 忽略）
 
 const quotaFixture = {success: true, data: {level: 'pro', limits: [
     {type: 'TOKENS_LIMIT', percentage: 88, nextResetTime: 2000000000000},
@@ -77,6 +77,22 @@ eq(q.fiveHourPct, 37, 'quota 5h pct (nearest reset, rounded)');
 eq(q.fiveHourResetMs, 1500000000000, 'quota 5h reset');
 eq(q.weekPct, 88, 'quota week pct (farthest)');
 eq(q.weekResetMs, 2000000000000, 'quota week reset');
+
+// 语义字段（unit 3=小时×5 → 5h；unit 6×1 → 周）优先于远近：构造周窗口重置更近的反例
+// （周三早上北京 5h 滚动重置点可能晚于周重置点，按远近会接反）
+const quotaSwapped = {success: true, data: {level: 'pro', limits: [
+    {type: 'TOKENS_LIMIT', percentage: 59, nextResetTime: 1500000000000, unit: 6, number: 1},
+    {type: 'TOKENS_LIMIT', percentage: 1, nextResetTime: 2000000000000, unit: 3, number: 5},
+]}};
+const qs = Lib.parseQuota(quotaSwapped);
+eq(qs.fiveHourPct, 1, 'quota semantic 5h (unit3×5 beats reset order)');
+eq(qs.weekPct, 59, 'quota semantic week (unit6×1 beats reset order)');
+// 只有语义 5h、无周窗口字段：周保持未取
+const qs5 = Lib.parseQuota({success: true, data: {limits: [
+    {type: 'TOKENS_LIMIT', percentage: 7, nextResetTime: 1500000000000, unit: 3, number: 5},
+]}});
+eq(qs5.fiveHourPct, 7, 'quota semantic 5h only');
+eq(qs5.weekPct, 0, 'quota semantic 5h only no week');
 eq(Lib.parseQuota({data: {}}).loaded, false, 'quota missing limits');
 
 // MARK: model-usage 解析
